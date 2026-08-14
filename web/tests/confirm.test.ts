@@ -5,7 +5,6 @@ import {
   deleteAllPhraseOk,
   deleteRangeValid,
   resetPhraseOk,
-  usernameConfirmOk,
 } from '../src/lib/confirm';
 
 describe('destructive confirmation dialogs', () => {
@@ -17,11 +16,11 @@ describe('destructive confirmation dialogs', () => {
     expect(resetPhraseOk('')).toBe(false);
   });
 
-  it('user delete requires the exact username (no trimming tolerance)', () => {
-    expect(usernameConfirmOk('alice', 'alice')).toBe(true);
-    expect(usernameConfirmOk('Alice', 'alice')).toBe(false);
-    expect(usernameConfirmOk('alice ', 'alice')).toBe(false);
-    expect(usernameConfirmOk('', 'alice')).toBe(false);
+  it('individual user delete needs only explicit confirmation (issue #16)', () => {
+    // No username typing: the dialog gates on a simple Confirm button and the
+    // server requires the literal body { confirm: true }.
+    expect(confirmChecked(true)).toBe(true);
+    expect(confirmChecked(false)).toBe(false);
   });
 
   it('range delete needs at least one filter and explicit confirmation', () => {

@@ -1,7 +1,7 @@
 import { FormEvent, useCallback, useEffect, useState } from 'react';
 import { api, validationDetails } from '../api';
 import { CapabilityNote, ErrorBox, fmtDate, fmtNum, Modal, Pager } from '../components/common';
-import { countConfirmOk, deleteAllPhraseOk, usernameConfirmOk } from '../lib/confirm';
+import { countConfirmOk, deleteAllPhraseOk } from '../lib/confirm';
 import { clampPage, nextSort } from '../lib/pagination';
 import type { AppInfo, Paged, UserSummary } from '../types';
 
@@ -206,6 +206,14 @@ export function DeleteAllUsersModal({
   );
 }
 
+/**
+ * Issue #16: individual user delete uses a simple confirmation dialog — the
+ * modal shows the user identity plus the irreversible related-record summary
+ * and offers Confirm / Cancel buttons; no type-name textbox. The server
+ * independently requires the literal body { confirm: true } and keeps every
+ * other destructive safeguard (capability gate, ALLOW_DESTRUCTIVE, CSRF/origin,
+ * transactional rollback, redacted audit).
+ */
 export function DeleteUserModal({
   app,
   user,
@@ -217,7 +225,6 @@ export function DeleteUserModal({
   onClose: () => void;
   onDeleted: () => void;
 }) {
-  const [typed, setTyped] = useState('');
   const [related, setRelated] = useState<Record<string, number> | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -228,13 +235,11 @@ export function DeleteUserModal({
       .catch(() => setRelated(null));
   }, [app.id, user.id]);
 
-  const ok = usernameConfirmOk(typed, user.username);
-
   const doDelete = async () => {
     setBusy(true);
     setError(null);
     try {
-      await api(`/apps/${app.id}/users/${user.id}`, { method: 'DELETE', body: { confirmUsername: typed } });
+      await api(`/apps/${app.id}/users/${user.id}`, { method: 'DELETE', body: { confirm: true } });
       onDeleted();
     } catch (err) {
       setError(validationDetails(err) ?? (err instanceof Error ? err.message : 'Delete failed'));
@@ -246,23 +251,20 @@ export function DeleteUserModal({
   return (
     <Modal title={`Delete user ${user.username}`} onClose={onClose}>
       <p>
-        This permanently deletes the user and (for adapters with cascading support) their related
-        data. This cannot be undone.
+        You are about to permanently delete user <strong>{user.username}</strong>
+        {user.email ? <> ({user.email})</> : ''} and (for adapters with cascading support) their
+        related data. This is irreversible and cannot be undone.
       </p>
       {related && (
         <p className="muted">
           Related rows: {Object.entries(related).map(([k, v]) => `${k}: ${v}`).join(', ')}
         </p>
       )}
-      <label>
-        Type the username <strong>{user.username}</strong> to confirm
-        <input value={typed} onChange={(e) => setTyped(e.target.value)} />
-      </label>
       <ErrorBox error={error} />
       <div className="modal-actions">
         <button className="link" onClick={onClose}>Cancel</button>
-        <button className="danger" disabled={!ok || busy} onClick={doDelete}>
-          {busy ? 'Deleting…' : 'Delete user'}
+        <button className="danger" disabled={busy} onClick={doDelete}>
+          {busy ? 'Deleting…' : 'Confirm delete'}
         </button>
       </div>
     </Modal>

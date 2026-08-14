@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { AppInfo, CapabilitySet } from '../src/types';
 import { capabilityOf, NAV_ITEMS, resolveNav, selectableApps } from '../src/lib/capabilities';
-import { usernameConfirmOk } from '../src/lib/confirm';
+import { confirmChecked } from '../src/lib/confirm';
 
 const full: CapabilitySet = {
   users: { list: true, get: true, create: true, update: true, disable: true, resetPassword: true, delete: true, deleteAll: true },
@@ -87,12 +87,11 @@ describe('destructive capability gating (issues #1 + #10 + #11 + #15)', () => {
     expect(capabilityOf(dwarfLike, 'priceHistory.reset')).toBe(true);
   });
 
-  it('issue #11: user-delete confirmation requires the exact username', () => {
-    // DeleteUserModal gates submission on usernameConfirmOk; the server
-    // independently re-checks confirmUsername before deleting.
-    expect(usernameConfirmOk('DwarfOne', 'DwarfOne')).toBe(true);
-    expect(usernameConfirmOk('dwarfone', 'DwarfOne')).toBe(false);
-    expect(usernameConfirmOk('', 'DwarfOne')).toBe(false);
+  it('issue #16: user-delete confirmation is a simple explicit confirm, not username typing', () => {
+    // DeleteUserModal gates submission on a simple Confirm button; the server
+    // independently requires the literal body { confirm: true } before deleting.
+    expect(confirmChecked(true)).toBe(true);
+    expect(confirmChecked(false)).toBe(false);
   });
 });
 

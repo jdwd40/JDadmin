@@ -150,12 +150,12 @@ describe('issue #11: Dwarf user delete (disposable DB)', () => {
     });
   });
 
-  it('rejects a wrong confirmation username: 400, no delete, no audit', async () => {
-    const res = await authed(request(h.app).delete(`/api/apps/dwarf/users/${VICTIM}`)).send({
-      confirmUsername: 'NotTheVictim',
-    });
+  it('rejects delete without explicit confirmation: 400, no delete, no audit', async () => {
+    // Issue #16: username typing is gone, but the literal { confirm: true }
+    // body is still mandatory.
+    const res = await authed(request(h.app).delete(`/api/apps/dwarf/users/${VICTIM}`)).send({});
     expect(res.status).toBe(400);
-    expect(res.body.error.message).toMatch(/confirmation username/i);
+    expect(res.body.error.details?.[0]?.message).toMatch(/explicit confirmation/i);
     const counts = await victimRowCounts(h.dbName);
     expect(counts.authUsers).toBe(1);
     expect(counts.wallets).toBe(1);
@@ -166,13 +166,13 @@ describe('issue #11: Dwarf user delete (disposable DB)', () => {
     const noToken = await request(h.app)
       .delete(`/api/apps/dwarf/users/${VICTIM}`)
       .set('Cookie', cookie)
-      .send({ confirmUsername: 'Victim' });
+      .send({ confirm: true });
     expect(noToken.status).toBe(403);
     expect(noToken.body.error.code).toBe('CSRF_FAILED');
 
     const badOrigin = await authed(request(h.app).delete(`/api/apps/dwarf/users/${VICTIM}`))
       .set('Origin', 'https://evil.example')
-      .send({ confirmUsername: 'Victim' });
+      .send({ confirm: true });
     expect(badOrigin.status).toBe(403);
     expect(badOrigin.body.error.code).toBe('BAD_ORIGIN');
 
@@ -184,14 +184,14 @@ describe('issue #11: Dwarf user delete (disposable DB)', () => {
   it('404s for an unknown user without touching anything', async () => {
     const res = await authed(
       request(h.app).delete('/api/apps/dwarf/users/99999999-9999-9999-9999-999999999999'),
-    ).send({ confirmUsername: 'ghost' });
+    ).send({ confirm: true });
     expect(res.status).toBe(404);
     expect((await auditRows(h, 'users.delete')).length).toBe(0);
   });
 
   it('refuses to delete the calling control-plane principal (adapter + database)', async () => {
     const res = await authed(request(h.app).delete(`/api/apps/dwarf/users/${PRINCIPAL}`)).send({
-      confirmUsername: 'DwarfOne',
+      confirm: true,
     });
     expect(res.status).toBe(400);
     expect(res.body.error.message).toMatch(/calling admin principal/i);
@@ -224,7 +224,7 @@ describe('issue #11: Dwarf user delete (disposable DB)', () => {
     // Demoted principal over HTTP: 42501 maps to a generic 403, no internals.
     await client.query(`UPDATE public.profiles SET role = 'player' WHERE id = $1`, [PRINCIPAL]);
     const res = await authed(request(h.app).delete(`/api/apps/dwarf/users/${VICTIM}`)).send({
-      confirmUsername: 'Victim',
+      confirm: true,
     });
     expect(res.status).toBe(403);
     expect(res.body.error.code).toBe('FORBIDDEN');
@@ -251,7 +251,7 @@ describe('issue #11: Dwarf user delete (disposable DB)', () => {
     await client.end();
 
     const res = await authed(request(h.app).delete(`/api/apps/dwarf/users/${VICTIM}`)).send({
-      confirmUsername: 'Victim',
+      confirm: true,
     });
     try {
       expect(res.status).toBe(409);
@@ -280,7 +280,7 @@ describe('issue #11: Dwarf user delete (disposable DB)', () => {
 
   it('deletes the user and every related row atomically, anonymizes feed/audit, audits redacted', async () => {
     const res = await authed(request(h.app).delete(`/api/apps/dwarf/users/${VICTIM}`)).send({
-      confirmUsername: 'Victim',
+      confirm: true,
     });
     expect(res.status).toBe(200);
     expect(res.body.ok).toBe(true);

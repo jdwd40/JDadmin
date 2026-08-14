@@ -111,16 +111,15 @@ describe('users endpoints (Coins adapter, disposable DB)', () => {
     expect(res.body.counts.transactions).toBe(1);
   });
 
-  it('refuses delete when confirmation username mismatches', async () => {
-    const res = await authed(request(h.app).delete('/api/apps/coins/users/1')).send({
-      confirmUsername: 'not-alice',
-    });
+  it('refuses delete without explicit confirmation (issue #16: no username typing)', async () => {
+    const res = await authed(request(h.app).delete('/api/apps/coins/users/1')).send({});
     expect(res.status).toBe(400);
+    expect(res.body.error.details?.[0]?.message).toMatch(/explicit confirmation/i);
   });
 
   it('deletes a user transactionally with related rows', async () => {
     const res = await authed(request(h.app).delete('/api/apps/coins/users/1')).send({
-      confirmUsername: 'alice',
+      confirm: true,
     });
     expect(res.status).toBe(200);
     const client = new pg.Client(adminUrlFor(h.dbName));
@@ -160,7 +159,7 @@ describe('destructive guard', () => {
       .delete('/api/apps/coins/users/1')
       .set('Cookie', cookie)
       .set('X-CSRF-Token', csrf)
-      .send({ confirmUsername: 'alice' });
+      .send({ confirm: true });
     expect(res.status).toBe(403);
     expect(res.body.error.code).toBe('DESTRUCTIVE_DISABLED');
   });

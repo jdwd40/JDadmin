@@ -321,7 +321,7 @@ describe('issue #2: Dwarf user administration (disposable DB)', () => {
     // Full delete coverage lives in dwarf-user-delete.test.ts; here we only
     // assert the placeholder behaviour is gone and the self-delete guard holds.
     const res = await authed(request(h.app).delete(`/api/apps/dwarf/users/${PRINCIPAL}`)).send({
-      confirmUsername: 'DwarfOne',
+      confirm: true,
     });
     expect(res.status).toBe(400);
     expect(res.body.error.message).toMatch(/calling admin principal/i);

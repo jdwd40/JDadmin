@@ -46,9 +46,9 @@ describe('issue #1: delete-action regression (Coins + Dwarf harness)', () => {
   it('failed/cancelled confirmations change nothing and write no audit event', async () => {
     const before = await destructiveAuditCount(h);
 
-    const wrongUser = await authed(request(h.app).delete('/api/apps/coins/users/2')).send({
-      confirmUsername: 'not-bob',
-    });
+    // Issue #16: individual user delete no longer requires typing the
+    // username, but it still requires the literal body { confirm: true }.
+    const wrongUser = await authed(request(h.app).delete('/api/apps/coins/users/2')).send({});
     expect(wrongUser.status).toBe(400);
 
     const unconfirmedRange = await authed(request(h.app).post('/api/apps/coins/price-history/delete-range')).send({
@@ -78,7 +78,7 @@ describe('issue #1: delete-action regression (Coins + Dwarf harness)', () => {
     const noToken = await request(h.app)
       .delete('/api/apps/coins/users/2')
       .set('Cookie', cookie)
-      .send({ confirmUsername: 'bob' });
+      .send({ confirm: true });
     expect(noToken.status).toBe(403);
     expect(noToken.body.error.code).toBe('CSRF_FAILED');
 
@@ -94,7 +94,7 @@ describe('issue #1: delete-action regression (Coins + Dwarf harness)', () => {
       .set('Cookie', cookie)
       .set('X-CSRF-Token', csrf)
       .set('Origin', 'https://evil.example')
-      .send({ confirmUsername: 'bob' });
+      .send({ confirm: true });
     expect(badOrigin.status).toBe(403);
     expect(badOrigin.body.error.code).toBe('BAD_ORIGIN');
 
@@ -120,7 +120,7 @@ describe('issue #1: delete-action regression (Coins + Dwarf harness)', () => {
 
   it('successful user delete records actor/app/action/entity with redacted summaries', async () => {
     const res = await authed(request(h.app).delete('/api/apps/coins/users/1')).send({
-      confirmUsername: 'alice',
+      confirm: true,
     });
     expect(res.status).toBe(200);
     expect(res.body.deletedRelated).toMatchObject({ portfolios: 1, transactions: 1 });
@@ -177,7 +177,7 @@ describe('issue #1: delete-action regression (Coins + Dwarf harness)', () => {
 
     const before = await destructiveAuditCount(h);
     const res = await authed(request(h.app).delete('/api/apps/coins/users/2')).send({
-      confirmUsername: 'bob',
+      confirm: true,
     });
     expect(res.status).toBe(409);
     expect(res.body.error.code).toBe('CONFLICT');
@@ -209,7 +209,7 @@ describe('issue #1: destructive guard writes no audit event', () => {
     const authed = (r: request.Test) => r.set('Cookie', cookie).set('X-CSRF-Token', csrf);
 
     const del = await authed(request(h.app).delete('/api/apps/coins/users/1')).send({
-      confirmUsername: 'alice',
+      confirm: true,
     });
     expect(del.status).toBe(403);
     expect(del.body.error.code).toBe('DESTRUCTIVE_DISABLED');

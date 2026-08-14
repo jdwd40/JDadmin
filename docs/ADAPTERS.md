@@ -27,7 +27,11 @@ be called for something it said it cannot do.
    entry with actor, app, action, previous/next (auto-redacted).
 6. **Destructive gates.** Delete/reset methods additionally pass through
    `requireDestructiveEnabled` (ALLOW_DESTRUCTIVE) and per-route confirmation
-   schemas in the HTTP layer.
+   schemas in the HTTP layer. Individual user delete requires the literal body
+   `{ confirm: true }` (issue #16 — no username typing); filtered price-history
+   range deletes require `confirm: true` plus at least one filter; bulk/
+   unfiltered deletes keep the much stricter exact phrase plus exact current
+   in-scope row count (issues #10/#15).
 
 ## Current capability matrix
 
@@ -37,7 +41,7 @@ be called for something it said it cannot do.
 | users list/get/update/resetPassword | ✓ | ✓ | ✓ |
 | users create | ✓ | ✓ (provisioned `jdadmin_admin_create_user` → `app_auth.register_user`, the app's own registration flow) | ✓ |
 | users disable | ✗ (no column; schema must not be migrated) | ✓ (`app_auth.users.disabled_at` + refresh-session revocation) | ✓ |
-| users delete (+ related counts) | ✓ cascade | ✓ (provisioned `jdadmin_admin_delete_user`; verified CASCADE/SET NULL FK graph, self-delete refused, redacted app-side auth event) | ✓ |
+| users delete (+ related counts, `confirm: true`) | ✓ cascade | ✓ (provisioned `jdadmin_admin_delete_user`; verified CASCADE/SET NULL FK graph, self-delete refused, redacted app-side auth event) | ✓ |
 | users deleteAll (transactional, phrase + exact-count confirmed) | ✓ one transaction over portfolios → transactions → users, full rollback on FK errors | ✓ EXCEPT the control-plane principal (provisioned `jdadmin_admin_delete_all_users`, ops/dwarf/005; see risk note below) | ✓ |
 | inventory list | ✓ portfolios | ✓ holdings (read-only) | ✓ |
 | inventory create/update/delete | ✓ | ✗ (engine owns writes) | ✓ |

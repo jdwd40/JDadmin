@@ -62,6 +62,24 @@ describe('resolveNav (capability-aware navigation)', () => {
   });
 });
 
+describe('destructive capability gating (issue #1)', () => {
+  // Mirrors the server-side Coins vs Dwarf capability split.
+  const dwarfLike: CapabilitySet = {
+    ...full,
+    users: { ...full.users, delete: false, disable: false, create: false },
+    priceHistory: { list: true, stats: true, deleteRange: false, reset: false },
+  };
+
+  it('delete/reset paths gate on the declared capability', () => {
+    expect(capabilityOf(full, 'users.delete')).toBe(true);
+    expect(capabilityOf(full, 'priceHistory.deleteRange')).toBe(true);
+    expect(capabilityOf(full, 'priceHistory.reset')).toBe(true);
+    expect(capabilityOf(dwarfLike, 'users.delete')).toBe(false);
+    expect(capabilityOf(dwarfLike, 'priceHistory.deleteRange')).toBe(false);
+    expect(capabilityOf(dwarfLike, 'priceHistory.reset')).toBe(false);
+  });
+});
+
 describe('selectableApps (app selector ordering)', () => {
   it('sorts available apps first, then by id', () => {
     const apps = [

@@ -17,6 +17,7 @@ const envSchema = z.object({
     .regex(/^[A-Za-z_][A-Za-z0-9_]*$/, 'COINS_SCHEMA must be a simple identifier')
     .optional(),
   DWARF_DATABASE_URL: z.string().optional(),
+  DWARF_ADMIN_PRINCIPAL_ID: z.string().uuid().optional(),
   SESSION_TTL_HOURS: z.coerce.number().positive().default(12),
   COOKIE_SECURE: boolEnv,
   COOKIE_NAME: z.string().default('jdadmin_session'),
@@ -35,6 +36,7 @@ export type AppConfig = Readonly<{
   coinsDatabaseUrl?: string;
   coinsSchema?: string;
   dwarfDatabaseUrl?: string;
+  dwarfAdminPrincipalId?: string;
   sessionTtlMs: number;
   cookieSecure: boolean;
   cookieName: string;
@@ -67,6 +69,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     coinsDatabaseUrl: parsed.COINS_DATABASE_URL || undefined,
     coinsSchema: parsed.COINS_SCHEMA || undefined,
     dwarfDatabaseUrl: parsed.DWARF_DATABASE_URL || undefined,
+    dwarfAdminPrincipalId: parsed.DWARF_ADMIN_PRINCIPAL_ID || undefined,
     sessionTtlMs: parsed.SESSION_TTL_HOURS * 3_600_000,
     cookieSecure: parsed.COOKIE_SECURE,
     cookieName: parsed.COOKIE_NAME,

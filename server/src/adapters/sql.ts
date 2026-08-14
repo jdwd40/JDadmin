@@ -33,6 +33,25 @@ export class AppPool {
     }
   }
 
+  async transactionAsPlayer<T>(playerId: string, work: (client: PoolClient) => Promise<T>): Promise<T> {
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu.test(playerId)) {
+      throw new TypeError('playerId must be a PostgreSQL UUID');
+    }
+    const client = await this.get().connect();
+    try {
+      await client.query('BEGIN');
+      await client.query("SELECT pg_catalog.set_config('app.user_id', $1, true)", [playerId]);
+      const result = await work(client);
+      await client.query('COMMIT');
+      return result;
+    } catch (err) {
+      await client.query('ROLLBACK').catch(() => undefined);
+      throw err;
+    } finally {
+      client.release();
+    }
+  }
+
   async close(): Promise<void> {
     if (this.pool) {
       await this.pool.end();

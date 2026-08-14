@@ -47,22 +47,23 @@ const T = {
   authUsers: 'app_auth.users',
 } as const;
 
-export function dwarfCapabilities(argon2Available: boolean): CapabilitySet {
+export function dwarfCapabilities(argon2Available: boolean, adminPrincipalConfigured = true): CapabilitySet {
+  const enabled = adminPrincipalConfigured;
   return {
     users: {
-      list: true,
-      get: true,
+      list: enabled,
+      get: enabled,
       create: false, // must use app registration flow (engine starter package)
-      update: true, // display_name only
+      update: enabled, // display_name only
       disable: false, // no disabled concept in schema
-      resetPassword: argon2Available, // Argon2id rehash of app_auth.users
+      resetPassword: enabled && argon2Available,
       delete: false, // engine/auth FK graph: unsafe outside app flows
     },
-    inventory: { list: true, create: false, update: false, delete: false },
-    transactions: { list: true, create: false, update: false, delete: false },
-    priceHistory: { list: true, stats: true, deleteRange: false, reset: false },
-    overview: true,
-    health: true,
+    inventory: { list: enabled, create: false, update: false, delete: false },
+    transactions: { list: enabled, create: false, update: false, delete: false },
+    priceHistory: { list: enabled, stats: enabled, deleteRange: false, reset: false },
+    overview: enabled,
+    health: enabled,
   };
 }
 
@@ -87,17 +88,26 @@ export class DwarfAdapter implements AppAdapter {
 
   private readonly db: AppPool;
   private readonly argon2: typeof import('argon2') | null;
+  private readonly adminPrincipalId?: string;
 
-  constructor(connectionString: string, argon2: typeof import('argon2') | null) {
+  constructor(connectionString: string, argon2: typeof import('argon2') | null, adminPrincipalId?: string) {
     this.db = new AppPool(connectionString);
     this.argon2 = argon2;
-    this.capabilities = dwarfCapabilities(Boolean(argon2));
+    this.adminPrincipalId = adminPrincipalId;
+    this.capabilities = dwarfCapabilities(Boolean(argon2), Boolean(adminPrincipalId));
+  }
+
+  private async query<T extends import('pg').QueryResultRow = import('pg').QueryResultRow>(text: string, params?: unknown[]) {
+    if (!this.adminPrincipalId) {
+      throw new ApiError(503, 'APP_UNAVAILABLE', 'DWARF_ADMIN_PRINCIPAL_ID is not configured');
+    }
+    return this.db.transactionAsPlayer(this.adminPrincipalId, (client) => client.query<T>(text, params));
   }
 
   async ping(): Promise<AppHealth> {
     const start = Date.now();
     try {
-      const version = await this.db.query<{ version: string }>('SELECT version()');
+      const version = await this.query<{ version: string }>('SELECT version()');
       const counts: Record<string, number> = {};
       for (const [label, table] of Object.entries({
         profiles: T.profiles,
@@ -106,7 +116,7 @@ export class DwarfAdapter implements AppAdapter {
         transactions: T.transactions,
         gems: T.gems,
       })) {
-        const res = await this.db.query<{ count: string }>(
+        const res = await this.query<{ count: string }>(
           `SELECT count(*)::text AS count FROM ${table}`,
         );
         counts[label] = Number(res.rows[0]?.count ?? 0);
@@ -124,28 +134,28 @@ export class DwarfAdapter implements AppAdapter {
 
   async overview(): Promise<OverviewData> {
     const [users, gems, txs, balances, recent] = await Promise.all([
-      this.db.query<{ count: string }>(`SELECT count(*)::text AS count FROM ${T.profiles}`),
-      this.db.query<{ count: string }>(`SELECT count(*)::text AS count FROM ${T.gems}`),
-      this.db.query<{ count: string }>(`SELECT count(*)::text AS count FROM ${T.transactions}`),
-      this.db.query<{ total: string | null }>(
+      this.query<{ count: string }>(`SELECT count(*)::text AS count FROM ${T.profiles}`),
+      this.query<{ count: string }>(`SELECT count(*)::text AS count FROM ${T.gems}`),
+      this.query<{ count: string }>(`SELECT count(*)::text AS count FROM ${T.transactions}`),
+      this.query<{ total: string | null }>(
         `SELECT sum(dcoin_balance)::text AS total FROM ${T.wallets}`,
       ),
-      this.db.query(
+      this.query(
         `SELECT t.*, g.symbol AS gem_symbol FROM ${T.transactions} t
          LEFT JOIN ${T.gems} g ON g.id = t.gem_id
          ORDER BY t.created_at DESC LIMIT 10`,
       ),
     ]);
-    const gemRows = await this.db.query<{ id: string; symbol: string }>(
+    const gemRows = await this.query<{ id: string; symbol: string }>(
       `SELECT id, symbol FROM ${T.gems} ORDER BY sort_order, symbol`,
     );
     const assetsSparkline: OverviewData['assetsSparkline'] = [];
     for (const gem of gemRows.rows) {
-      const pts = await this.db.query<{ price: string }>(
+      const pts = await this.query<{ price: string }>(
         `SELECT price::text FROM ${T.priceHistory} WHERE gem_id = $1 ORDER BY recorded_at DESC LIMIT 30`,
         [gem.id],
       );
-      const latest = await this.db.query<{ price: string }>(
+      const latest = await this.query<{ price: string }>(
         `SELECT price::text FROM ${T.priceHistory} WHERE gem_id = $1 ORDER BY recorded_at DESC LIMIT 1`,
         [gem.id],
       );
@@ -167,7 +177,7 @@ export class DwarfAdapter implements AppAdapter {
   }
 
   async listAssets(): Promise<AssetInfo[]> {
-    const res = await this.db.query<{ id: string; name: string; symbol: string; base_price: string }>(
+    const res = await this.query<{ id: string; name: string; symbol: string; base_price: string }>(
       `SELECT id, name, symbol, base_price::text FROM ${T.gems} ORDER BY sort_order, symbol`,
     );
     return res.rows.map((r) => ({
@@ -188,14 +198,14 @@ export class DwarfAdapter implements AppAdapter {
     const fromSql = `FROM ${T.profiles} p
        LEFT JOIN ${T.authUsers} au ON au.id = p.id
        LEFT JOIN ${T.wallets} w ON w.user_id = p.id`;
-    const total = await this.db.query<{ count: string }>(
+    const total = await this.query<{ count: string }>(
       `SELECT count(*)::text AS count FROM ${T.profiles} p
        LEFT JOIN ${T.authUsers} au ON au.id = p.id ${where}`,
       params,
     );
     const orderBy = orderByClause(query, USER_SORTS, 'createdAt');
     const page = pageClause(query, params);
-    const res = await this.db.query<{
+    const res = await this.query<{
       id: string;
       display_name: string | null;
       email: string | null;
@@ -224,7 +234,7 @@ export class DwarfAdapter implements AppAdapter {
   }
 
   async getUser(id: string): Promise<UserDetail> {
-    const res = await this.db.query<{
+    const res = await this.query<{
       id: string;
       display_name: string | null;
       email: string | null;
@@ -276,7 +286,7 @@ export class DwarfAdapter implements AppAdapter {
       return this.getUser(id);
     }
     await this.getUser(id);
-    await this.db.query(
+    await this.query(
       `UPDATE ${T.profiles} SET display_name = $1, updated_at = now() WHERE id = $2`,
       [patch.displayName, id],
     );
@@ -289,13 +299,11 @@ export class DwarfAdapter implements AppAdapter {
     }
     await this.getUser(id);
     const hash = await this.argon2.hash(newPassword, { type: this.argon2.argon2id });
-    const res = await this.db.query(
-      `UPDATE ${T.authUsers}
-          SET password_hash = $1, legacy_password_hash = NULL, password_changed_at = now(), updated_at = now()
-        WHERE id = $2`,
-      [hash, id],
+  const res = await this.query<{ ok: boolean }>(
+      `SELECT public.jdadmin_admin_reset_password($1, $2) AS ok`,
+      [id, hash],
     );
-    if (!res.rowCount) throw new ApiError(404, 'NOT_FOUND', 'Auth user not found');
+    if (!res.rows[0]?.ok) throw new ApiError(404, 'NOT_FOUND', 'Auth user not found');
   }
 
   async listInventory(userId: string | undefined, query: ListQuery): Promise<Paged<import('./types.js').InventoryItem>> {
@@ -315,12 +323,12 @@ export class DwarfAdapter implements AppAdapter {
     }
     const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
     const fromSql = `FROM ${T.holdings} h JOIN ${T.gems} g ON g.id = h.gem_id`;
-    const total = await this.db.query<{ count: string }>(
+    const total = await this.query<{ count: string }>(
       `SELECT count(*)::text AS count ${fromSql} ${whereSql}`,
       params,
     );
     const page = pageClause(query, params);
-    const res = await this.db.query(
+    const res = await this.query(
       `SELECT h.id, h.user_id, h.gem_id, h.amount_grams::text, h.average_buy_price::text,
               h.reserved_grams::text, g.name, g.symbol
          ${fromSql} ${whereSql} ORDER BY h.created_at DESC ${page}`,
@@ -379,13 +387,13 @@ export class DwarfAdapter implements AppAdapter {
     }
     const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
     const fromSql = `FROM ${T.transactions} t LEFT JOIN ${T.gems} g ON g.id = t.gem_id`;
-    const total = await this.db.query<{ count: string }>(
+    const total = await this.query<{ count: string }>(
       `SELECT count(*)::text AS count ${fromSql} ${whereSql}`,
       params,
     );
     const orderBy = orderByClause(query, TX_SORTS, 'createdAt');
     const page = pageClause(query, params);
-    const res = await this.db.query(
+    const res = await this.query(
       `SELECT t.*, g.symbol AS gem_symbol ${fromSql} ${whereSql} ${orderBy} ${page}`,
       params,
     );
@@ -413,7 +421,7 @@ export class DwarfAdapter implements AppAdapter {
       where.push(`recorded_at <= $${params.length}`);
     }
     const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
-    const total = await this.db.query<{ count: string }>(
+    const total = await this.query<{ count: string }>(
       `SELECT count(*)::text AS count FROM ${T.priceHistory} ${whereSql}`,
       params,
     );
@@ -421,7 +429,7 @@ export class DwarfAdapter implements AppAdapter {
       { page: query.page, pageSize: query.pageSize, order: 'desc', filters: {} },
       params,
     );
-    const res = await this.db.query<{ id: string; gem_id: string; price: string; recorded_at: Date }>(
+    const res = await this.query<{ id: string; gem_id: string; price: string; recorded_at: Date }>(
       `SELECT id, gem_id, price::text, recorded_at FROM ${T.priceHistory}
          ${whereSql} ORDER BY recorded_at DESC ${page}`,
       params,
@@ -446,7 +454,7 @@ export class DwarfAdapter implements AppAdapter {
       params.push(assetId);
       where = `WHERE ph.gem_id = $1`;
     }
-    const res = await this.db.query<{
+    const res = await this.query<{
       gem_id: string;
       symbol: string;
       count: string;
@@ -491,7 +499,7 @@ export class DwarfAdapter implements AppAdapter {
       where.push(`recorded_at <= $${params.length}`);
     }
     if (!where.length) throw new ApiError(400, 'BAD_REQUEST', 'A filter is required');
-    const res = await this.db.query<{ count: string }>(
+    const res = await this.query<{ count: string }>(
       `SELECT count(*)::text AS count FROM ${T.priceHistory} WHERE ${where.join(' AND ')}`,
       params,
     );

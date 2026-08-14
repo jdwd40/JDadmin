@@ -34,7 +34,7 @@ export class AdapterRegistry {
     }
 
     if (config.dwarfDatabaseUrl) {
-      await registry.register(new DwarfAdapter(config.dwarfDatabaseUrl, argon2));
+      await registry.register(new DwarfAdapter(config.dwarfDatabaseUrl, argon2, config.dwarfAdminPrincipalId));
     } else {
       registry.registerUnavailable('dwarf', 'Dwarf Coins', 'DWARF_DATABASE_URL not configured');
     }

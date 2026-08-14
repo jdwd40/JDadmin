@@ -178,7 +178,7 @@ CREATE TABLE public.price_history (
 INSERT INTO app_auth.users (id, email, display_name) VALUES
   ('11111111-1111-1111-1111-111111111111', 'dwarf1@example.test', 'DwarfOne');
 INSERT INTO public.profiles (id, display_name, role) VALUES
-  ('11111111-1111-1111-1111-111111111111', 'DwarfOne', 'player');
+  ('11111111-1111-1111-1111-111111111111', 'DwarfOne', 'admin');
 INSERT INTO public.wallets (user_id, dcoin_balance) VALUES
   ('11111111-1111-1111-1111-111111111111', 777);
 INSERT INTO public.gems (id, name, symbol, base_price, sort_order) VALUES
@@ -226,6 +226,7 @@ export async function createHarness(opts: HarnessOptions = {}): Promise<TestHarn
     COINS_DATABASE_URL: opts.withCoins ? url : undefined,
     COINS_SCHEMA: opts.withCoins ? COINS_SCHEMA : undefined,
     DWARF_DATABASE_URL: opts.withDwarf ? url : undefined,
+    DWARF_ADMIN_PRINCIPAL_ID: opts.withDwarf ? '11111111-1111-1111-1111-111111111111' : undefined,
     ALLOW_DESTRUCTIVE: opts.allowDestructive === false ? 'false' : 'true',
     LOGIN_RATE_LIMIT_MAX: String(opts.loginRateLimitMax ?? 5),
     LOGIN_RATE_LIMIT_WINDOW_MS: '60000',

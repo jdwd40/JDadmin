@@ -211,17 +211,19 @@ describe('issue #10: Dwarf provisioned price-history functions', () => {
       deleteRange: true,
       reset: true,
     });
-    // Individual user delete is supported since issue #11; delete-all stays
-    // off (the calling principal is in scope and self-delete is refused).
+    // Individual user delete since issue #11; delete-all since issue #15,
+    // scoped to all users except the control-plane principal (covered by the
+    // issue #15 suite). With only the principal present, the in-scope count
+    // is 0, so a stale count of 1 is rejected without deleting anything.
     expect(dwarf.capabilities.users.delete).toBe(true);
-    expect(dwarf.capabilities.users.deleteAll).toBe(false);
+    expect(dwarf.capabilities.users.deleteAll).toBe(true);
 
     const delAll = await authed(request(h.app).post('/api/apps/dwarf/users/delete-all')).send({
       phrase: 'DELETE ALL',
       expectedCount: 1,
     });
-    expect(delAll.status).toBe(403);
-    expect(delAll.body.error.code).toBe('UNSUPPORTED_CAPABILITY');
+    expect(delAll.status).toBe(400);
+    expect(delAll.body.error.message).toMatch(/count confirmation mismatch/i);
     expect((await auditRows(h, 'users.delete_all')).length).toBe(0);
   });
 

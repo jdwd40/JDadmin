@@ -101,12 +101,21 @@ describe('capability isolation and registry behavior', () => {
     expect(res.status).toBe(404);
   });
 
-  it('Dwarf user delete-all is unsupported; mock user delete works (isolation)', async () => {
+  it('Dwarf user delete-all rejects a stale count confirmation (isolation)', async () => {
+    // Dwarf delete-all is now supported (issue #15), but the fixture has zero
+    // in-scope users (only the protected control-plane principal), so a stale
+    // count of 1 is an honest 400 count-mismatch: no deletion and no audit.
     const dwarfDelAll = await authed(
       request(h.app).post('/api/apps/dwarf/users/delete-all'),
     ).send({ phrase: 'DELETE ALL', expectedCount: 1 });
-    expect(dwarfDelAll.status).toBe(403);
-    expect(dwarfDelAll.body.error.code).toBe('UNSUPPORTED_CAPABILITY');
+    expect(dwarfDelAll.status).toBe(400);
+    expect(dwarfDelAll.body.error.message).toMatch(/count confirmation mismatch/i);
+
+    const audit = await request(h.app)
+      .get('/api/audit?appId=dwarf&action=users.delete_all')
+      .set('Cookie', cookie);
+    expect(audit.status).toBe(200);
+    expect(audit.body.total).toBe(0);
 
     const created = await authed(request(h.app).post('/api/apps/mock/users')).send({
       username: 'deleteme',

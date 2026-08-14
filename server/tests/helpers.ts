@@ -278,13 +278,14 @@ INSERT INTO public.price_history (gem_id, price, recorded_at) VALUES
 
 /**
  * Minimal mirrors of the Dwarf engine/auth functions the adapter relies on,
- * plus the JDadmin-provisioned control-plane functions (ops/dwarf/001–004).
+ * plus the JDadmin-provisioned control-plane functions (ops/dwarf/001–005).
  * Kept faithful to the real bodies so tests exercise the actual guard logic:
  * transaction-local app.user_id → profiles.role='admin' enforcement,
  * Argon2id-only hash acceptance, starter-package creation via the engine hook,
- * disabled_at + session-revocation semantics, and the issue #11 cascading
+ * disabled_at + session-revocation semantics, the issue #11 cascading
  * user delete with truthful counts, self-delete refusal and redacted
- * app-side audit event.
+ * app-side audit event, and the issue #15 delete-all-except-principal with
+ * database-side exact-count re-validation.
  */
 export const DWARF_FUNCTIONS_SQL = `
 CREATE FUNCTION public.current_player_id() RETURNS uuid
@@ -596,6 +597,60 @@ BEGIN
   DELETE FROM app_auth.users WHERE id = p_user_id;
 
   RETURN v_counts;
+END;
+$fn$;
+
+-- ops/dwarf/005_jdadmin_user_delete_all.sql (issue #15): IRREVERSIBLE delete of
+-- every app user EXCEPT the calling control-plane principal. Re-checks the
+-- admin caller, re-validates the exact in-scope count database-side, counts
+-- dependents first (truthful counts), records a redacted auth event, then lets
+-- the verified CASCADE/SET NULL FK graph remove/anonymize every dependent row.
+CREATE FUNCTION public.jdadmin_admin_delete_all_users(p_expected_count bigint)
+RETURNS jsonb
+LANGUAGE plpgsql SECURITY DEFINER SET search_path TO public, app_auth, pg_catalog
+AS $fn$
+DECLARE
+  v_admin uuid := public.current_player_id();
+  v_inscope bigint;
+  v_counts jsonb;
+BEGIN
+  PERFORM public.assert_admin_caller();
+
+  SELECT count(*) INTO v_inscope FROM app_auth.users WHERE id <> v_admin;
+
+  IF p_expected_count IS NULL OR p_expected_count <> v_inscope THEN
+    RAISE EXCEPTION 'Count confirmation mismatch: % users are in scope (all users except the control-plane principal); re-check the scope and confirm the exact total.', v_inscope;
+  END IF;
+
+  SELECT jsonb_build_object(
+    'wallets', (SELECT count(*) FROM public.wallets w WHERE w.user_id IN (SELECT id FROM app_auth.users WHERE id <> v_admin)),
+    'portfolio_holdings', (SELECT count(*) FROM public.portfolio_holdings h WHERE h.user_id IN (SELECT id FROM app_auth.users WHERE id <> v_admin)),
+    'transactions', (SELECT count(*) FROM public.transactions t WHERE t.user_id IN (SELECT id FROM app_auth.users WHERE id <> v_admin)),
+    'limit_orders', (SELECT count(*) FROM public.limit_orders o WHERE o.user_id IN (SELECT id FROM app_auth.users WHERE id <> v_admin)),
+    'mining_jobs', (SELECT count(*) FROM public.mining_jobs j WHERE j.user_id IN (SELECT id FROM app_auth.users WHERE id <> v_admin)),
+    'player_action_cooldowns', (SELECT count(*) FROM public.player_action_cooldowns c WHERE c.user_id IN (SELECT id FROM app_auth.users WHERE id <> v_admin)),
+    'leaderboard_cache', (SELECT count(*) FROM public.leaderboard_cache l WHERE l.user_id IN (SELECT id FROM app_auth.users WHERE id <> v_admin)),
+    'public_feed_anonymized', (SELECT count(*) FROM public.public_feed f WHERE f.user_id IN (SELECT id FROM app_auth.users WHERE id <> v_admin)),
+    'identities', (SELECT count(*) FROM app_auth.identities i WHERE i.user_id IN (SELECT id FROM app_auth.users WHERE id <> v_admin)),
+    'refresh_sessions', (SELECT count(*) FROM app_auth.refresh_sessions s WHERE s.user_id IN (SELECT id FROM app_auth.users WHERE id <> v_admin)),
+    'password_reset_tokens', (SELECT count(*) FROM app_auth.password_reset_tokens r WHERE r.user_id IN (SELECT id FROM app_auth.users WHERE id <> v_admin))
+  ) INTO v_counts;
+
+  INSERT INTO app_auth.auth_events (user_id, event_type, metadata)
+  VALUES (
+    v_admin,
+    'admin_deleted_all_users',
+    jsonb_build_object(
+      'scope', 'all_users_except_control_principal',
+      'excluded_user_id', v_admin,
+      'deleted_users', v_inscope,
+      'related_counts', v_counts
+    )
+  );
+
+  DELETE FROM app_auth.users WHERE id <> v_admin;
+
+  RETURN jsonb_build_object('deleted_users', v_inscope, 'related_counts', v_counts);
 END;
 $fn$;
 `;

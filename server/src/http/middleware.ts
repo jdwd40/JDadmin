@@ -154,6 +154,30 @@ export function errorHandler(err: unknown, _req: Request, res: Response, _next: 
     res.status(400).json({ error: { code: 'BAD_JSON', message: 'Malformed JSON body' } });
     return;
   }
+  // PostgreSQL integrity/business-function failures must surface as clear 4xx,
+  // never as a generic silent 500.
+  const pgCode = (err as { code?: unknown }).code;
+  if (pgCode === '23503') {
+    res.status(409).json({
+      error: {
+        code: 'CONFLICT',
+        message:
+          'Operation blocked by referential integrity: related records exist that this action does not remove.',
+      },
+    });
+    return;
+  }
+  if (pgCode === '23505') {
+    res.status(409).json({ error: { code: 'CONFLICT', message: 'A record with these values already exists.' } });
+    return;
+  }
+  if (pgCode === 'P0001') {
+    // RAISE EXCEPTION from an application/business function: the message is
+    // app-authored guidance for operators; stack and internals stay hidden.
+    const message = err instanceof Error && err.message ? err.message : 'Rejected by application rule';
+    res.status(400).json({ error: { code: 'BAD_REQUEST', message } });
+    return;
+  }
   // Never leak internals.
   res.status(500).json({ error: { code: 'INTERNAL', message: 'Internal server error' } });
 }

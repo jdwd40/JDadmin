@@ -50,6 +50,18 @@ describe('describeMetric', () => {
     expect(d.text).not.toContain('unavailable');
   });
 
+  it('renders a measured app-process RSS without inventing a total or percent', () => {
+    const d = describeMetric({
+      ...base,
+      scope: 'app process (RSS: coins backend)',
+      usedBytes: 128 * 1024 * 1024,
+    });
+    expect(d.tone).toBe('ok-text');
+    expect(d.text).toBe('128 MiB used');
+    expect(d.text).not.toContain('%');
+    expect(d.detail).toBe('app process (RSS: coins backend)');
+  });
+
   it('renders unavailable as a state, never as zero', () => {
     const d = describeMetric({
       ...base,

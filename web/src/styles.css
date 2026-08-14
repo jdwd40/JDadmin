@@ -150,8 +150,76 @@ tr.clickable:hover td { background: var(--panel-2); }
 
 .sparkline { display: block; }
 
+/* System Health resource visualizations (issue #9) */
+.metric-group { margin-bottom: 16px; }
+.metric-group-host {
+  border-left: 4px solid var(--accent);
+  background: var(--panel-2);
+}
+.metric-group-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+.metric-group-head strong { font-size: 16px; }
+.metric-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  gap: 12px;
+}
+.metric-card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.metric-group-host .metric-card { background: var(--panel); }
+.metric-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.metric-label { font-weight: 600; font-size: 14px; }
+.status-pill {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 2px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  white-space: nowrap;
+}
+.status-pill.status-normal { color: var(--ok); border-color: var(--ok); }
+.status-pill.status-near-capacity,
+.status-pill.status-stale { color: var(--warn); border-color: var(--warn); }
+.status-pill.status-unavailable { color: var(--muted); }
+.status-pill.status-host { color: var(--accent); border-color: var(--accent); }
+.metric-percent { font-size: 30px; font-weight: 700; line-height: 1.15; }
+.metric-percent-caption { font-size: 13px; font-weight: 400; }
+.meter {
+  height: 12px;
+  border-radius: 999px;
+  background: var(--bg);
+  overflow: hidden;
+}
+.meter-fill { height: 100%; border-radius: 999px; }
+.meter-fill-ok { background: var(--ok); }
+.meter-fill-warn { background: var(--warn); }
+.meter-fill-muted { background: var(--border); }
+.meter-indeterminate .meter-fill { width: 100%; opacity: 0.35; }
+.metric-numbers strong { font-size: 15px; }
+.metric-reason { color: var(--muted); }
+
 @media (max-width: 900px) {
   .layout { flex-direction: column; }
   .sidebar { width: 100%; height: auto; position: static; }
   .content { padding: 16px; }
+}
+
+@media (max-width: 640px) {
+  .metric-grid { grid-template-columns: 1fr; }
+  .metric-percent { font-size: 24px; }
+  .metric-group-head { flex-direction: column; align-items: flex-start; gap: 4px; }
 }

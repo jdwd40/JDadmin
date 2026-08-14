@@ -122,8 +122,12 @@ export function Users({ app, onOpenUser }: { app: AppInfo; onOpenUser: (userId: 
 
 /**
  * Issue #10: bulk delete-all of every user and their related rows. Requires
- * the exact phrase DELETE ALL plus typing the exact current user count; the
- * server re-checks the count inside the transactional delete.
+ * the exact phrase DELETE ALL plus typing the exact current in-scope user
+ * count; the server re-checks the count inside the transactional delete.
+ * Issue #15: the in-scope count and scope label come from the dedicated
+ * delete-all count endpoint, so adapters with a narrower scope (Dwarf
+ * excludes its control-plane principal) display and confirm the exact
+ * exclusion truthfully.
  */
 export function DeleteAllUsersModal({
   app,
@@ -136,14 +140,20 @@ export function DeleteAllUsersModal({
 }) {
   const [phrase, setPhrase] = useState('');
   const [total, setTotal] = useState<number | null>(null);
+  const [scope, setScope] = useState<string>('all users');
   const [countInput, setCountInput] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  // Fetch the unfiltered user total fresh — a filtered list count would be wrong.
+  // Fetch the exact in-scope delete-all count fresh — a filtered list count
+  // would be wrong, and for Dwarf the scope excludes the control-plane
+  // principal (so it is NOT the plain user-list total).
   useEffect(() => {
-    api<Paged<UserSummary>>(`/apps/${app.id}/users`, { query: { page: 1, pageSize: 1 } })
-      .then((r) => setTotal(r.total))
+    api<{ count: number; scope?: string }>(`/apps/${app.id}/users/delete-all/count`)
+      .then((r) => {
+        setTotal(r.count);
+        if (r.scope) setScope(r.scope);
+      })
       .catch((err) => setError(validationDetails(err) ?? (err instanceof Error ? err.message : 'Count failed')));
   }, [app.id]);
 
@@ -170,14 +180,18 @@ export function DeleteAllUsersModal({
     <Modal title="Delete ALL users" onClose={onClose}>
       <form onSubmit={doDeleteAll}>
         <p className="warn-text">
-          This permanently deletes <strong>every user</strong> of {app.label}
-          {total !== null ? <> — currently <strong>{total.toLocaleString()}</strong> users</> : ''}{' '}
-          together with their related records (portfolios, transactions). This cannot be undone.
+          This permanently deletes <strong>{scope}</strong> of {app.label}
+          {total !== null ? <> — currently <strong>{total.toLocaleString()}</strong> users in scope</> : ''}{' '}
+          together with their related records (wallets, portfolios/holdings, transactions, orders,
+          sessions). This is irreversible and cannot be undone.
         </p>
+        {scope !== 'all users' && (
+          <p className="muted">Scope: {scope} — anything outside this scope is preserved.</p>
+        )}
         <label>Type <strong>DELETE ALL</strong> to confirm
           <input value={phrase} onChange={(e) => setPhrase(e.target.value)} />
         </label>
-        <label>Type the exact user count{total !== null ? <> (<strong>{total.toLocaleString()}</strong>)</> : ''} to confirm
+        <label>Type the exact in-scope user count{total !== null ? <> (<strong>{total.toLocaleString()}</strong>)</> : ''} to confirm
           <input value={countInput} onChange={(e) => setCountInput(e.target.value)} inputMode="numeric" />
         </label>
         <ErrorBox error={error} />

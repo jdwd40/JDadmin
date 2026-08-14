@@ -289,6 +289,20 @@ export interface AppAdapter {
   userRelatedCounts?(id: string): Promise<RelatedCounts>;
   deleteUser?(id: string): Promise<void>;
   /**
+   * Exact number of users in the delete-all scope RIGHT NOW (issue #10/#15).
+   * Optional; adapters whose delete-all scope is narrower than "every listed
+   * user" (e.g. Dwarf excludes the calling control-plane principal, issue
+   * #15) MUST implement it. The route/UI use it for the exact-count
+   * confirmation; without it the scope count is the unfiltered list total.
+   */
+  deleteAllUsersCount?(): Promise<number>;
+  /**
+   * Human-readable scope label for delete-all (issue #15). Defaults to
+   * 'all users'; adapters with a narrower scope declare the exact exclusion
+   * here so routes/audit/UI state it truthfully.
+   */
+  readonly deleteAllUsersScopeLabel?: string;
+  /**
    * Transactional delete of ALL users and their related rows (issue #10).
    * The route gates this behind capability + destructive guard + exact-count
    * confirmation; the adapter must run it as one atomic transaction that

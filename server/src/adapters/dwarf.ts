@@ -7,6 +7,7 @@ import type {
   AppResourceUsage,
   AssetInfo,
   CapabilitySet,
+  DeleteAllUsersResult,
   ListQuery,
   OverviewData,
   Paged,
@@ -61,10 +62,21 @@ import type {
  * app-side auth event, refuses to delete the calling control-plane principal,
  * and the whole graph deletes atomically in the caller's transaction.
  *
- * Delete-ALL users stays UNSUPPORTED: the calling control-plane principal is
- * itself a row in that scope and the self-delete guard makes an honest full
- * delete-all impossible — and wiping every engine user is not an operation
- * Dwarf supports.
+ * Delete-ALL users IS supported (issue #15) via the provisioned SECURITY
+ * DEFINER function public.jdadmin_admin_delete_all_users
+ * (ops/dwarf/005_jdadmin_user_delete_all.sql), with one structural exclusion:
+ * the calling control-plane principal (DWARF_ADMIN_PRINCIPAL_ID) is never in
+ * scope — deleting it would remove the identity required to call the
+ * controlled functions and lock out the admin. The function derives the
+ * exclusion from the transaction-local caller identity (never from a
+ * caller-supplied id), re-checks assert_admin_caller(), re-validates the
+ * exact in-scope count database-side, counts dependents first (truthful
+ * counts), records a redacted 'admin_deleted_all_users' auth event, and
+ * deletes the whole verified FK graph atomically in the caller's transaction.
+ * The operation is IRREVERSIBLE: every deleted user's wallet, holdings,
+ * transactions/ledger, orders, mining jobs, cooldowns and leaderboard rows
+ * are destroyed (the product owner explicitly accepts this); public_feed and
+ * auth_events rows survive anonymized via ON DELETE SET NULL.
  *
  * Price-history deletion IS supported (issue #10) via the provisioned
  * SECURITY DEFINER functions in ops/dwarf/003_jdadmin_price_history_admin.sql.
@@ -109,9 +121,10 @@ export function dwarfCapabilities(argon2Available: boolean, adminPrincipalConfig
       // Via jdadmin_admin_delete_user → app_auth.users DELETE with the
       // verified CASCADE/SET NULL FK graph (issue #11, ops/dwarf/004).
       delete: enabled,
-      // Not provided: the caller's own principal is in scope and the
-      // self-delete guard makes an honest full delete-all impossible.
-      deleteAll: false,
+      // Via jdadmin_admin_delete_all_users (issue #15, ops/dwarf/005):
+      // every user EXCEPT the calling control-plane principal, which the
+      // function excludes structurally from the caller identity.
+      deleteAll: enabled,
     },
     inventory: { list: enabled, create: false, update: false, delete: false },
     transactions: { list: enabled, create: false, update: false, delete: false },
@@ -481,6 +494,54 @@ export class DwarfAdapter implements AppAdapter {
     }
     await this.getUser(id);
     await this.query(`SELECT public.jdadmin_admin_delete_user($1)`, [id]);
+  }
+
+  /**
+   * Issue #15: the delete-all scope is every app user EXCEPT the calling
+   * control-plane principal. The label is declared so routes/audit/UI state
+   * the exact exclusion truthfully.
+   */
+  readonly deleteAllUsersScopeLabel = 'all users except the control-plane principal';
+
+  /**
+   * Issue #15: exact current in-scope count (app users minus the calling
+   * principal). Used by the route and UI for the exact-count confirmation;
+   * the database function re-validates the same count at delete time.
+   */
+  async deleteAllUsersCount(): Promise<number> {
+    const res = await this.query<{ count: string }>(
+      `SELECT count(*)::text AS count FROM ${T.authUsers} WHERE id <> $1`,
+      [this.adminPrincipalId],
+    );
+    return Number(res.rows[0]?.count ?? 0);
+  }
+
+  /**
+   * Issue #15: IRREVERSIBLE delete of every user except the control-plane
+   * principal via the provisioned jdadmin_admin_delete_all_users SECURITY
+   * DEFINER function. The in-scope count is recomputed inside the same
+   * transaction and passed to the function, which re-validates it
+   * database-side and rolls everything back on any mismatch or FK/business
+   * failure — no partial delete is possible. Returns truthful dependent
+   * counts computed by the function before deletion.
+   */
+  async deleteAllUsers(): Promise<DeleteAllUsersResult> {
+    if (!this.adminPrincipalId) {
+      throw new ApiError(503, 'APP_UNAVAILABLE', 'DWARF_ADMIN_PRINCIPAL_ID is not configured');
+    }
+    return this.db.transactionAsPlayer(this.adminPrincipalId, async (client) => {
+      const scope = await client.query<{ count: string }>(
+        `SELECT count(*)::text AS count FROM ${T.authUsers} WHERE id <> $1`,
+        [this.adminPrincipalId],
+      );
+      const res = await client.query<{ result: { deleted_users: number; related_counts: RelatedCounts } }>(
+        `SELECT public.jdadmin_admin_delete_all_users($1) AS result`,
+        [Number(scope.rows[0]?.count ?? 0)],
+      );
+      const result = res.rows[0]?.result;
+      if (!result) throw new ApiError(500, 'INTERNAL', 'Dwarf delete-all returned no result');
+      return { users: Number(result.deleted_users), related: result.related_counts };
+    });
   }
 
   async listInventory(userId: string | undefined, query: ListQuery): Promise<Paged<import('./types.js').InventoryItem>> {

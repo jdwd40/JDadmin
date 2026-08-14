@@ -105,13 +105,16 @@ describe('issue #1: delete-action regression (Coins + Dwarf harness)', () => {
     expect(await destructiveAuditCount(h)).toBe(before);
   });
 
-  it('unsupported adapter capability (Dwarf user delete-all) is an honest 403 with no audit event', async () => {
+  it('Dwarf user delete-all rejects a stale count confirmation with no audit event', async () => {
+    // Dwarf delete-all is now supported (issue #15), but the fixture has zero
+    // in-scope users (only the protected control-plane principal), so a stale
+    // count of 1 is an honest 400 count-mismatch: no deletion and no audit.
     const before = await destructiveAuditCount(h, 'dwarf');
     const delAll = await authed(
       request(h.app).post('/api/apps/dwarf/users/delete-all'),
     ).send({ phrase: 'DELETE ALL', expectedCount: 1 });
-    expect(delAll.status).toBe(403);
-    expect(delAll.body.error.code).toBe('UNSUPPORTED_CAPABILITY');
+    expect(delAll.status).toBe(400);
+    expect(delAll.body.error.message).toMatch(/count confirmation mismatch/i);
     expect(await destructiveAuditCount(h, 'dwarf')).toBe(before);
   });
 

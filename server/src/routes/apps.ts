@@ -101,6 +101,18 @@ const userDeleteAllSchema = z.object({
   expectedCount: z.number().int().min(0),
 });
 
+/**
+ * Exact number of users currently in the delete-all scope. Adapters whose
+ * scope is narrower than "every listed user" (Dwarf excludes its
+ * control-plane principal, issue #15) provide deleteAllUsersCount; otherwise
+ * the scope is the unfiltered list total.
+ */
+async function deleteAllScopeCount(adapter: import('../adapters/types.js').AppAdapter): Promise<number> {
+  if (adapter.deleteAllUsersCount) return adapter.deleteAllUsersCount();
+  const scope = await adapter.listUsers({ page: 1, pageSize: 1, order: 'asc', filters: {} });
+  return scope.total;
+}
+
 export function appsRouter(): Router {
   const r = Router();
 
@@ -283,6 +295,24 @@ export function appsRouter(): Router {
   });
 
   /**
+   * Exact current in-scope user count for the delete-all confirmation dialog
+   * (issue #15). Read-only; gated on the deleteAll capability so the count
+   * and its scope label always match what the delete would actually touch.
+   */
+  r.get('/:appId/users/delete-all/count', requireCapability('users.deleteAll'), async (req, res, next) => {
+    try {
+      const adapter = requireAdapter(req);
+      if (!adapter.deleteAllUsers) throw errors.unsupported('users.deleteAll');
+      res.json({
+        count: await deleteAllScopeCount(adapter),
+        scope: adapter.deleteAllUsersScopeLabel ?? 'all users',
+      });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  /**
    * Issue #10: bulk delete-all users. Requires the destructive guard, the
    * exact phrase DELETE ALL, and the exact current user count so an
    * unfiltered production-wide delete can never run accidentally. The
@@ -295,10 +325,11 @@ export function appsRouter(): Router {
       const adapter = requireAdapter(req);
       if (!adapter.deleteAllUsers) throw errors.unsupported('users.deleteAll');
       const body = userDeleteAllSchema.parse(req.body);
-      const scope = await adapter.listUsers({ page: 1, pageSize: 1, order: 'asc', filters: {} });
-      if (body.expectedCount !== scope.total) {
+      const scopeLabel = adapter.deleteAllUsersScopeLabel ?? 'all users';
+      const scopeCount = await deleteAllScopeCount(adapter);
+      if (body.expectedCount !== scopeCount) {
         throw errors.badRequest(
-          `Count confirmation mismatch: the app currently has ${scope.total} users; re-check the scope and confirm the exact total.`,
+          `Count confirmation mismatch: ${scopeCount} users are currently in scope (${scopeLabel}); re-check the scope and confirm the exact total.`,
         );
       }
       const result = await adapter.deleteAllUsers();
@@ -309,7 +340,7 @@ export function appsRouter(): Router {
         action: 'users.delete_all',
         entityType: 'user',
         entityId: null,
-        previous: { scope: 'all users', confirmedCount: body.expectedCount },
+        previous: { scope: scopeLabel, confirmedCount: body.expectedCount },
         next: { deletedUsers: result.users, deletedRelated: result.related },
         meta: clientMeta(req),
       });

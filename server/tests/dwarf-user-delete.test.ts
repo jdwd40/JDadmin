@@ -9,8 +9,10 @@ import { adminUrlFor, createHarness, TestHarness } from './helpers.js';
  * provisioned jdadmin_admin_delete_user SECURITY DEFINER function
  * (ops/dwarf/004). Asserts success with related-record deletion, truthful
  * counts, rollback with no partial delete, self-delete prevention, DB-level
- * admin-caller enforcement, CSRF/origin/cancellation with no audit, audit
- * redaction, and that delete-all users stays unsupported.
+ * admin-caller enforcement, CSRF/origin/cancellation with no audit, and audit
+ * redaction. Delete-all users is covered by the issue #15 suite (it is
+ * supported since #15, scoped to all users except the control-plane
+ * principal).
  */
 
 const PRINCIPAL = '11111111-1111-1111-1111-111111111111';
@@ -77,10 +79,12 @@ async function victimRowCounts(dbName: string) {
 }
 
 describe('issue #11: Dwarf capability flags (unit)', () => {
-  it('enables individual delete, keeps delete-all honestly off', () => {
+  it('enables individual delete and (since issue #15) scoped delete-all', () => {
     const caps = dwarfCapabilities(true, true);
     expect(caps.users.delete).toBe(true);
-    expect(caps.users.deleteAll).toBe(false);
+    // Issue #15: delete-all is on, scoped to all users except the
+    // control-plane principal (jdadmin_admin_delete_all_users, ops/dwarf/005).
+    expect(caps.users.deleteAll).toBe(true);
   });
 
   it('turns delete off without a configured admin principal', () => {
@@ -104,18 +108,24 @@ describe('issue #11: Dwarf user delete (disposable DB)', () => {
 
   const authed = (r: request.Test) => r.set('Cookie', cookie).set('X-CSRF-Token', csrf);
 
-  it('advertises delete=true / deleteAll=false and still refuses delete-all', async () => {
+  it('advertises delete=true / deleteAll=true; delete-all enforces the in-scope count', async () => {
     const res = await request(h.app).get('/api/apps').set('Cookie', cookie);
     const dwarf = res.body.apps.find((a: { id: string }) => a.id === 'dwarf');
     expect(dwarf.capabilities.users.delete).toBe(true);
-    expect(dwarf.capabilities.users.deleteAll).toBe(false);
+    expect(dwarf.capabilities.users.deleteAll).toBe(true); // issue #15
+
+    // The scope is all users EXCEPT the principal: 0 in scope here, so a
+    // stale count of 1 is rejected with no delete and no audit.
+    const count = await request(h.app).get('/api/apps/dwarf/users/delete-all/count').set('Cookie', cookie);
+    expect(count.status).toBe(200);
+    expect(count.body).toMatchObject({ count: 0, scope: 'all users except the control-plane principal' });
 
     const delAll = await authed(request(h.app).post('/api/apps/dwarf/users/delete-all')).send({
       phrase: 'DELETE ALL',
       expectedCount: 1,
     });
-    expect(delAll.status).toBe(403);
-    expect(delAll.body.error.code).toBe('UNSUPPORTED_CAPABILITY');
+    expect(delAll.status).toBe(400);
+    expect(delAll.body.error.message).toMatch(/count confirmation mismatch/i);
     expect((await auditRows(h, 'users.delete_all')).length).toBe(0);
   });
 

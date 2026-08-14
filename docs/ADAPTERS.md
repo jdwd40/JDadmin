@@ -38,7 +38,7 @@ be called for something it said it cannot do.
 | users create | ✓ | ✓ (provisioned `jdadmin_admin_create_user` → `app_auth.register_user`, the app's own registration flow) | ✓ |
 | users disable | ✗ (no column; schema must not be migrated) | ✓ (`app_auth.users.disabled_at` + refresh-session revocation) | ✓ |
 | users delete (+ related counts) | ✓ cascade | ✓ (provisioned `jdadmin_admin_delete_user`; verified CASCADE/SET NULL FK graph, self-delete refused, redacted app-side auth event) | ✓ |
-| users deleteAll (transactional, phrase + exact-count confirmed) | ✓ one transaction over portfolios → transactions → users, full rollback on FK errors | ✗ (the calling control-plane principal is itself in scope and the self-delete guard makes an honest full delete-all impossible; wiping every engine user is not a Dwarf-supported operation) | ✓ |
+| users deleteAll (transactional, phrase + exact-count confirmed) | ✓ one transaction over portfolios → transactions → users, full rollback on FK errors | ✓ EXCEPT the control-plane principal (provisioned `jdadmin_admin_delete_all_users`, ops/dwarf/005; see risk note below) | ✓ |
 | inventory list | ✓ portfolios | ✓ holdings (read-only) | ✓ |
 | inventory create/update/delete | ✓ | ✗ (engine owns writes) | ✓ |
 | transactions list | ✓ | ✓ (read-only) | ✓ |
@@ -67,7 +67,40 @@ calling principal, refuses to delete that principal, and deletes the
 wallet, holdings, ledger rows, limit orders, mining jobs, cooldowns,
 leaderboard cache, identities, sessions, reset tokens; `public_feed` and
 `auth_events` rows survive anonymized via `ON DELETE SET NULL`). Any failure
-rolls the whole transaction back.
+rolls the whole transaction back. Dwarf's `users.deleteAll` (issue #15)
+additionally requires `ops/dwarf/005_jdadmin_user_delete_all.sql`
+(`jdadmin_admin_delete_all_users`); see the risk note below.
+
+### Dwarf users.deleteAll — scope, exclusion, and irreversible risk (issue #15)
+
+**Exact scope/exclusion:** every `app_auth.users` row EXCEPT the calling
+JDadmin control-plane principal (`DWARF_ADMIN_PRINCIPAL_ID`). The principal is
+the identity required to call the controlled SECURITY DEFINER functions;
+deleting it would lock out the admin control plane, so the function derives
+the exclusion from the transaction-local caller identity — never from a
+caller-supplied id — and leaves that row (present, disabled, passwordless)
+completely untouched.
+
+**IRREVERSIBLE.** The cascade destroys every in-scope user's profile, wallet,
+portfolio holdings, transactions/ledger rows, limit orders, mining jobs,
+cooldowns, leaderboard rows, identities, refresh sessions, and password-reset
+tokens. `public_feed` and `app_auth.auth_events` rows survive anonymized
+(`ON DELETE SET NULL`). The product owner explicitly accepts this destruction
+of user history/financial records; there is no undo or soft-delete copy — take
+a database backup first.
+
+**Guards (in order):** HTTP destructive guard (`ALLOW_DESTRUCTIVE`), CSRF +
+origin checks, the exact phrase `DELETE ALL`, and the exact current in-scope
+count (from `GET /:appId/users/delete-all/count`, which excludes the
+principal — it is NOT the plain user-list total). The route re-checks the
+count, and the database function re-validates it again inside the same
+transaction (`p_expected_count` must equal the live in-scope count) before
+deleting. The function re-checks `public.assert_admin_caller()`, counts all
+dependents first (truthful counts in the response/audit), records a redacted
+`admin_deleted_all_users` auth event (scope label + excluded principal UUID +
+counts only — no emails, names, or hashes), and deletes the whole graph
+atomically. Any count mismatch, non-admin caller, or FK surprise aborts with
+no partial delete and no audit entry.
 
 Issue #10 delete-all operations (`users.deleteAll`, `priceHistory.reset`) are
 never unfiltered at the HTTP layer: they require the destructive guard, an

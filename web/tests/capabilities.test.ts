@@ -63,15 +63,15 @@ describe('resolveNav (capability-aware navigation)', () => {
   });
 });
 
-describe('destructive capability gating (issues #1 + #10 + #11)', () => {
+describe('destructive capability gating (issues #1 + #10 + #11 + #15)', () => {
   // Mirrors the server-side Coins vs Dwarf capability split. Since issue #10
-  // Dwarf supports price-history deletes (provisioned functions), and since
-  // issue #11 individual user delete (jdadmin_admin_delete_user); delete-all
-  // users stays off because the calling principal is in scope and the
-  // self-delete guard makes an honest full delete-all impossible.
+  // Dwarf supports price-history deletes (provisioned functions), since
+  // issue #11 individual user delete (jdadmin_admin_delete_user), and since
+  // issue #15 delete-all users scoped to every user except the calling
+  // control-plane principal (jdadmin_admin_delete_all_users).
   const dwarfLike: CapabilitySet = {
     ...full,
-    users: { ...full.users, delete: true, deleteAll: false, disable: true, create: true },
+    users: { ...full.users, delete: true, deleteAll: true, disable: true, create: true },
   };
 
   it('delete/reset paths gate on the declared capability', () => {
@@ -81,7 +81,7 @@ describe('destructive capability gating (issues #1 + #10 + #11)', () => {
     expect(capabilityOf(full, 'priceHistory.deleteRange')).toBe(true);
     expect(capabilityOf(full, 'priceHistory.reset')).toBe(true);
     expect(capabilityOf(dwarfLike, 'users.delete')).toBe(true);
-    expect(capabilityOf(dwarfLike, 'users.deleteAll')).toBe(false);
+    expect(capabilityOf(dwarfLike, 'users.deleteAll')).toBe(true);
     expect(capabilityOf(dwarfLike, 'priceHistory.delete')).toBe(true);
     expect(capabilityOf(dwarfLike, 'priceHistory.deleteRange')).toBe(true);
     expect(capabilityOf(dwarfLike, 'priceHistory.reset')).toBe(true);
@@ -93,8 +93,6 @@ describe('destructive capability gating (issues #1 + #10 + #11)', () => {
     expect(usernameConfirmOk('DwarfOne', 'DwarfOne')).toBe(true);
     expect(usernameConfirmOk('dwarfone', 'DwarfOne')).toBe(false);
     expect(usernameConfirmOk('', 'DwarfOne')).toBe(false);
-    // With deleteAll off, the count-confirmation path is never reachable.
-    expect(capabilityOf(dwarfLike, 'users.deleteAll')).toBe(false);
   });
 });
 

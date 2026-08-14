@@ -38,7 +38,8 @@ describe('Dwarf capability flags (unit)', () => {
     expect(caps.users.disable).toBe(true);
     expect(caps.users.resetPassword).toBe(true);
     expect(caps.users.delete).toBe(true); // issue #11: jdadmin_admin_delete_user
-    expect(caps.users.deleteAll).toBe(false); // self-delete guard: caller is in scope
+    // Issue #15: jdadmin_admin_delete_all_users excludes the calling principal.
+    expect(caps.users.deleteAll).toBe(true);
     // Issue #10: price-history deletes are supported via provisioned wrappers.
     expect(caps.priceHistory.delete).toBe(true);
     expect(caps.priceHistory.deleteRange).toBe(true);
@@ -88,7 +89,7 @@ describe('issue #2: Dwarf user administration (disposable DB)', () => {
       disable: true,
       resetPassword: true,
       delete: true, // issue #11
-      deleteAll: false,
+      deleteAll: true, // issue #15: all users except the control-plane principal
     });
   });
 

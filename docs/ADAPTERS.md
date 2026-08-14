@@ -26,9 +26,9 @@ be called for something it said it cannot do.
 |---|---|---|---|
 | overview | ✓ | ✓ | ✓ |
 | users list/get/update/resetPassword | ✓ | ✓ | ✓ |
-| users create | ✓ | ✗ (app registration flow owns it) | ✓ |
-| users disable | ✗ (no column; schema must not be migrated) | ✗ (no concept) | ✓ |
-| users delete (+ related counts) | ✓ cascade | ✗ (engine/auth FK graph) | ✓ |
+| users create | ✓ | ✓ (provisioned `jdadmin_admin_create_user` → `app_auth.register_user`, the app's own registration flow) | ✓ |
+| users disable | ✗ (no column; schema must not be migrated) | ✓ (`app_auth.users.disabled_at` + refresh-session revocation) | ✓ |
+| users delete (+ related counts) | ✓ cascade | ✗ (engine/auth FK graph cascades into the append-only ledger; no safe function exists — disable instead) | ✓ |
 | inventory list | ✓ portfolios | ✓ holdings (read-only) | ✓ |
 | inventory create/update/delete | ✓ | ✗ (engine owns writes) | ✓ |
 | transactions list | ✓ | ✓ (read-only) | ✓ |
@@ -37,8 +37,13 @@ be called for something it said it cannot do.
 | priceHistory list/stats | ✓ | ✓ | ✓ |
 | priceHistory deleteRange/reset | ✓ | ✗ | ✓ |
 
-Dwarf's `users.resetPassword` degrades to false at runtime if the optional
-`argon2` dependency cannot be loaded (capability computed at boot).
+Dwarf's `users.resetPassword` and `users.create` degrade to false at runtime
+if the optional `argon2` dependency cannot be loaded (capability computed at
+boot). `users.create`/`users.disable`/`users.resetPassword` additionally
+require the Dwarf-side provisioning scripts `ops/dwarf/001_jdadmin_principal.sql`
+and `ops/dwarf/002_jdadmin_user_admin.sql` to have been applied by the Dwarf
+owner role; they create the SECURITY DEFINER control-plane functions the
+adapter calls (granted to `dc_api` only).
 
 Unavailable apps (missing DB URL or failed registration) appear in
 `GET /api/apps` with `available: false` and an `availabilityError`; their

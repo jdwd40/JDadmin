@@ -12,6 +12,7 @@ import type {
   PricePoint,
   PriceStats,
   TransactionItem,
+  UserCreateInput,
   UserDetail,
   UserSummary,
   UserUpdateInput,
@@ -32,9 +33,22 @@ import type {
  * The market engine owns wallets/holdings/ledger via PostgreSQL functions and
  * locking. Direct writes would bypass those invariants, so inventory and
  * transactions are deliberately READ-ONLY here. User profile display_name
- * update and password reset are safe; other writes are declared unsupported
- * instead of faked. New-user creation must go through the app's registration
- * flow (starter package, engine hooks), so it is unsupported here.
+ * update and password reset are safe.
+ *
+ * User creation is supported via the provisioned SECURITY DEFINER wrapper
+ * public.jdadmin_admin_create_user (ops/dwarf/002_jdadmin_user_admin.sql),
+ * which delegates to app_auth.register_user — the app's own registration flow
+ * (engine starter package, identity rows, registration event). Passwords are
+ * hashed server-side with Argon2id; plaintext never reaches the database.
+ *
+ * Disable/enable is supported via app_auth.users.disabled_at (the schema's
+ * own access latch honoured by every login/session path) plus refresh-session
+ * revocation, through public.jdadmin_admin_set_user_disabled.
+ *
+ * User deletion remains UNSUPPORTED: profiles.id anchors engine-owned wallets,
+ * holdings, limit orders and the append-only transactions ledger via cascading
+ * FKs, and Dwarf has no delete-user function. Deleting would destroy financial
+ * history, so the capability stays false instead of being faked.
  */
 
 const T = {
@@ -53,11 +67,15 @@ export function dwarfCapabilities(argon2Available: boolean, adminPrincipalConfig
     users: {
       list: enabled,
       get: enabled,
-      create: false, // must use app registration flow (engine starter package)
+      // Via provisioned jdadmin_admin_create_user → app_auth.register_user
+      // (the real registration flow). Needs server-side Argon2id hashing.
+      create: enabled && argon2Available,
       update: enabled, // display_name only
-      disable: false, // no disabled concept in schema
+      // Via jdadmin_admin_set_user_disabled → app_auth.users.disabled_at
+      // plus refresh-session revocation.
+      disable: enabled,
       resetPassword: enabled && argon2Available,
-      delete: false, // engine/auth FK graph: unsafe outside app flows
+      delete: false, // engine/auth FK graph: would cascade into the append-only ledger
     },
     inventory: { list: enabled, create: false, update: false, delete: false },
     transactions: { list: enabled, create: false, update: false, delete: false },
@@ -210,10 +228,11 @@ export class DwarfAdapter implements AppAdapter {
       display_name: string | null;
       email: string | null;
       role: string;
+      disabled_at: Date | null;
       dcoin_balance: string | null;
       created_at: Date;
     }>(
-      `SELECT p.id, p.display_name, au.email, p.role, w.dcoin_balance::text, p.created_at
+      `SELECT p.id, p.display_name, au.email, p.role, au.disabled_at, w.dcoin_balance::text, p.created_at
        ${fromSql} ${where} ${orderBy} ${page}`,
       params,
     );
@@ -224,7 +243,7 @@ export class DwarfAdapter implements AppAdapter {
         email: r.email,
         displayName: r.display_name,
         balance: num(r.dcoin_balance),
-        disabled: null,
+        disabled: r.disabled_at != null,
         createdAt: r.created_at ? new Date(r.created_at).toISOString() : null,
       })),
       total: Number(total.rows[0]?.count ?? 0),
@@ -240,12 +259,13 @@ export class DwarfAdapter implements AppAdapter {
       email: string | null;
       role: string;
       bankruptcy_count: number;
+      disabled_at: Date | null;
       dcoin_balance: string | null;
       loan_debt: string | null;
       created_at: Date;
       last_active_at: Date | null;
     }>(
-      `SELECT p.id, p.display_name, au.email, p.role, p.bankruptcy_count,
+      `SELECT p.id, p.display_name, au.email, p.role, p.bankruptcy_count, au.disabled_at,
               w.dcoin_balance::text, w.loan_debt::text, p.created_at, p.last_active_at
          FROM ${T.profiles} p
          LEFT JOIN ${T.authUsers} au ON au.id = p.id
@@ -261,7 +281,7 @@ export class DwarfAdapter implements AppAdapter {
       email: row.email,
       displayName: row.display_name,
       balance: num(row.dcoin_balance),
-      disabled: null,
+      disabled: row.disabled_at != null,
       createdAt: row.created_at ? new Date(row.created_at).toISOString() : null,
       extra: {
         role: row.role,
@@ -272,25 +292,73 @@ export class DwarfAdapter implements AppAdapter {
     };
   }
 
+  /**
+   * Create a Dwarf user through the app's own registration flow. `username`
+   * maps to the profile display name; email is required because it is the
+   * Dwarf login identity. Initial balances are engine-owned (starter package),
+   * so `balance` is rejected rather than silently ignored.
+   */
+  async createUser(input: UserCreateInput): Promise<UserDetail> {
+    if (!this.argon2) {
+      throw new ApiError(403, 'UNSUPPORTED_CAPABILITY', 'argon2 module unavailable on server');
+    }
+    if (input.balance !== undefined) {
+      throw new ApiError(
+        403,
+        'UNSUPPORTED_CAPABILITY',
+        'Dwarf adapter does not set balances on create (the engine starter package owns initial funds).',
+      );
+    }
+    const email = input.email?.trim().toLowerCase();
+    if (!email) {
+      throw new ApiError(400, 'BAD_REQUEST', 'Dwarf user creation requires an email (the Dwarf login identity).');
+    }
+    const hash = await this.argon2.hash(input.password, { type: this.argon2.argon2id });
+    const res = await this.query<{ u: { id: string } }>(
+      `SELECT public.jdadmin_admin_create_user($1, $2, $3) AS u`,
+      [email, input.username, hash],
+    );
+    const id = res.rows[0]?.u?.id;
+    if (!id) throw new ApiError(500, 'INTERNAL', 'Dwarf registration flow returned no user id');
+    return this.getUser(id);
+  }
+
   async updateUser(id: string, patch: UserUpdateInput): Promise<UserDetail> {
-    if (patch.displayName === undefined) {
-      // Only display_name is a safe direct write; anything else is rejected
-      // rather than silently ignored.
-      if (patch.username !== undefined || patch.email !== undefined || patch.balance !== undefined) {
-        throw new ApiError(
-          403,
-          'UNSUPPORTED_CAPABILITY',
-          'Dwarf adapter supports updating displayName only (email/balance are engine-owned).',
-        );
-      }
+    // username is the profile display name for Dwarf, so accept it as an
+    // alias; anything engine/auth-owned is rejected rather than ignored.
+    if (patch.email !== undefined || patch.balance !== undefined) {
+      throw new ApiError(
+        403,
+        'UNSUPPORTED_CAPABILITY',
+        'Dwarf adapter supports updating displayName/username only (email/balance are engine- or auth-owned).',
+      );
+    }
+    if (
+      patch.username !== undefined &&
+      patch.displayName !== undefined &&
+      patch.username !== patch.displayName
+    ) {
+      throw new ApiError(400, 'BAD_REQUEST', 'username and displayName are the same Dwarf field and must match.');
+    }
+    const displayName = patch.displayName ?? patch.username;
+    if (displayName === undefined) {
       return this.getUser(id);
     }
     await this.getUser(id);
     await this.query(
       `UPDATE ${T.profiles} SET display_name = $1, updated_at = now() WHERE id = $2`,
-      [patch.displayName, id],
+      [displayName, id],
     );
     return this.getUser(id);
+  }
+
+  async setUserDisabled(id: string, disabled: boolean): Promise<void> {
+    await this.getUser(id);
+    const res = await this.query<{ ok: boolean }>(
+      `SELECT public.jdadmin_admin_set_user_disabled($1, $2) AS ok`,
+      [id, disabled],
+    );
+    if (!res.rows[0]?.ok) throw new ApiError(404, 'NOT_FOUND', 'Auth user not found');
   }
 
   async resetUserPassword(id: string, newPassword: string): Promise<void> {
@@ -299,7 +367,7 @@ export class DwarfAdapter implements AppAdapter {
     }
     await this.getUser(id);
     const hash = await this.argon2.hash(newPassword, { type: this.argon2.argon2id });
-  const res = await this.query<{ ok: boolean }>(
+    const res = await this.query<{ ok: boolean }>(
       `SELECT public.jdadmin_admin_reset_password($1, $2) AS ok`,
       [id, hash],
     );

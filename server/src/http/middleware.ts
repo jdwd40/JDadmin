@@ -178,6 +178,15 @@ export function errorHandler(err: unknown, _req: Request, res: Response, _next: 
     res.status(400).json({ error: { code: 'BAD_REQUEST', message } });
     return;
   }
+  if (pgCode === '42501') {
+    // insufficient_privilege from a guard function (e.g. assert_admin_caller)
+    // or a missing grant: the PG message can name internal objects, so respond
+    // generically.
+    res.status(403).json({
+      error: { code: 'FORBIDDEN', message: 'Operation not permitted for the configured database principal.' },
+    });
+    return;
+  }
   // Never leak internals.
   res.status(500).json({ error: { code: 'INTERNAL', message: 'Internal server error' } });
 }

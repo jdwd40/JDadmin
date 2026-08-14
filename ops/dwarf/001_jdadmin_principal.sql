@@ -60,7 +60,7 @@ SET search_path TO public, app_auth, pg_catalog
 AS $function$
 BEGIN
   PERFORM public.assert_admin_caller();
-  IF p_password_hash IS NULL OR p_password_hash !~ '^\\$argon2id\\$' THEN
+  IF p_password_hash IS NULL OR p_password_hash !~ '^\$argon2id\$' THEN
     RAISE EXCEPTION 'Only Argon2id password hashes are accepted';
   END IF;
   UPDATE app_auth.users

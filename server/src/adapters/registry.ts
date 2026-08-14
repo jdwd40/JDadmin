@@ -68,10 +68,10 @@ export class AdapterRegistry {
         id,
         label,
         capabilities: {
-          users: { list: false, get: false, create: false, update: false, disable: false, resetPassword: false, delete: false },
+          users: { list: false, get: false, create: false, update: false, disable: false, resetPassword: false, delete: false, deleteAll: false },
           inventory: { list: false, create: false, update: false, delete: false },
           transactions: { list: false, create: false, update: false, delete: false },
-          priceHistory: { list: false, stats: false, deleteRange: false, reset: false },
+          priceHistory: { list: false, stats: false, delete: false, deleteRange: false, reset: false },
           overview: false,
           health: false,
         },

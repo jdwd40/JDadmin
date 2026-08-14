@@ -51,6 +51,13 @@ import type {
  * holdings, limit orders and the append-only transactions ledger via cascading
  * FKs, and Dwarf has no delete-user function. Deleting would destroy financial
  * history, so the capability stays false instead of being faked.
+ *
+ * Price-history deletion IS supported (issue #10) via the provisioned
+ * SECURITY DEFINER functions in ops/dwarf/003_jdadmin_price_history_admin.sql.
+ * Deleting chart snapshots is an operation Dwarf itself performs
+ * (public.prune_old_data retention sweep), so it breaks no engine invariant;
+ * the wrappers re-check public.assert_admin_caller() and are granted to
+ * dc_api only. Long-term OHLC aggregates are engine-owned and untouched.
  */
 
 const T = {
@@ -78,10 +85,19 @@ export function dwarfCapabilities(argon2Available: boolean, adminPrincipalConfig
       disable: enabled,
       resetPassword: enabled && argon2Available,
       delete: false, // engine/auth FK graph: would cascade into the append-only ledger
+      deleteAll: false, // same FK graph; no safe delete-user function exists
     },
     inventory: { list: enabled, create: false, update: false, delete: false },
     transactions: { list: enabled, create: false, update: false, delete: false },
-    priceHistory: { list: enabled, stats: enabled, deleteRange: false, reset: false },
+    // Via provisioned jdadmin_admin_*_price_* functions (ops/dwarf/003);
+    // mirrors the engine's own prune_old_data retention deletes.
+    priceHistory: {
+      list: enabled,
+      stats: enabled,
+      delete: enabled,
+      deleteRange: enabled,
+      reset: enabled,
+    },
     overview: enabled,
     health: enabled,
   };
@@ -586,12 +602,60 @@ export class DwarfAdapter implements AppAdapter {
       params.push(filter.to);
       where.push(`recorded_at <= $${params.length}`);
     }
-    if (!where.length) throw new ApiError(400, 'BAD_REQUEST', 'A filter is required');
+    const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
     const res = await this.query<{ count: string }>(
-      `SELECT count(*)::text AS count FROM ${T.priceHistory} WHERE ${where.join(' AND ')}`,
+      `SELECT count(*)::text AS count FROM ${T.priceHistory} ${whereSql}`,
       params,
     );
     return Number(res.rows[0]?.count ?? 0);
+  }
+
+  /**
+   * Issue #10: individual price-history record delete via the provisioned
+   * jdadmin_admin_delete_price_point function. Returns the deleted point.
+   */
+  async deletePricePoint(id: string): Promise<PricePoint> {
+    const existing = await this.query<{ id: string; gem_id: string; price: string; recorded_at: Date }>(
+      `SELECT id, gem_id, price::text, recorded_at FROM ${T.priceHistory} WHERE id = $1`,
+      [id],
+    );
+    const row = existing.rows[0];
+    if (!row) throw new ApiError(404, 'NOT_FOUND', 'Price history record not found');
+    const res = await this.query<{ ok: boolean }>(
+      `SELECT public.jdadmin_admin_delete_price_point($1) AS ok`,
+      [id],
+    );
+    if (!res.rows[0]?.ok) throw new ApiError(404, 'NOT_FOUND', 'Price history record not found');
+    return {
+      id: row.id,
+      assetId: row.gem_id,
+      price: Number(row.price),
+      recordedAt: new Date(row.recorded_at).toISOString(),
+    };
+  }
+
+  /**
+   * Issue #10: filtered range delete via jdadmin_admin_delete_price_history_range.
+   * At least one filter is mandatory — unfiltered deletion is the reset path.
+   */
+  async deletePriceHistoryRange(filter: { assetId?: string; from?: string; to?: string }): Promise<number> {
+    if (!filter.assetId && !filter.from && !filter.to) {
+      throw new ApiError(400, 'BAD_REQUEST', 'A filter (asset or date range) is required');
+    }
+    const res = await this.query<{ deleted: string }>(
+      `SELECT public.jdadmin_admin_delete_price_history_range($1, $2, $3)::text AS deleted`,
+      [filter.assetId ?? null, filter.from ?? null, filter.to ?? null],
+    );
+    return Number(res.rows[0]?.deleted ?? 0);
+  }
+
+  /** Issue #10: confirmed delete-all (optionally scoped to one gem). */
+  async resetPriceHistory(assetId?: string): Promise<number> {
+    const res = await this.query<{ deleted: string }>(
+      `SELECT public.jdadmin_admin_reset_price_history($1)::text AS deleted`,
+      [assetId ?? null],
+    );
+    return Number(res.rows[0]?.deleted ?? 0);
   }
 
   async close(): Promise<void> {

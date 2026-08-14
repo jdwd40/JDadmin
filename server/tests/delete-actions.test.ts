@@ -10,7 +10,13 @@ import { adminUrlFor, COINS_SCHEMA, createHarness, TestHarness } from './helpers
  * referential-integrity handling, and unsupported adapters.
  */
 
-const DESTRUCTIVE_ACTIONS = ['users.delete', 'price_history.delete_range', 'price_history.reset'];
+const DESTRUCTIVE_ACTIONS = [
+  'users.delete',
+  'users.delete_all',
+  'price_history.delete',
+  'price_history.delete_range',
+  'price_history.reset',
+];
 
 async function destructiveAuditCount(h: TestHarness, appId?: string): Promise<number> {
   const res = await h.adminDb.query<{ count: string }>(

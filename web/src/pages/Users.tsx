@@ -1,7 +1,7 @@
 import { FormEvent, useCallback, useEffect, useState } from 'react';
 import { api, validationDetails } from '../api';
 import { CapabilityNote, ErrorBox, fmtDate, fmtNum, Modal, Pager } from '../components/common';
-import { usernameConfirmOk } from '../lib/confirm';
+import { countConfirmOk, deleteAllPhraseOk, usernameConfirmOk } from '../lib/confirm';
 import { clampPage, nextSort } from '../lib/pagination';
 import type { AppInfo, Paged, UserSummary } from '../types';
 
@@ -17,6 +17,7 @@ export function Users({ app, onOpenUser }: { app: AppInfo; onOpenUser: (userId: 
   const [sort, setSort] = useState<Sort>({ sort: undefined, order: 'asc' });
   const [error, setError] = useState<unknown>(null);
   const [creating, setCreating] = useState(false);
+  const [deletingAll, setDeletingAll] = useState(false);
 
   const load = useCallback(async () => {
     setError(null);
@@ -50,9 +51,13 @@ export function Users({ app, onOpenUser }: { app: AppInfo; onOpenUser: (userId: 
     <div>
       <div className="page-head">
         <h1>{app.label} — Users</h1>
-        {caps.create && <button onClick={() => setCreating(true)}>Create user</button>}
+        <div className="actions">
+          {caps.create && <button onClick={() => setCreating(true)}>Create user</button>}
+          {caps.deleteAll && <button className="danger" onClick={() => setDeletingAll(true)}>Delete all users…</button>}
+        </div>
       </div>
       {!caps.create && <CapabilityNote supported={false} label="User creation" />}
+      {!caps.deleteAll && <CapabilityNote supported={false} label="Bulk delete-all users" />}
       <input
         className="search"
         placeholder="Search username or email…"
@@ -100,7 +105,90 @@ export function Users({ app, onOpenUser }: { app: AppInfo; onOpenUser: (userId: 
           }}
         />
       )}
+      {deletingAll && (
+        <DeleteAllUsersModal
+          app={app}
+          onClose={() => setDeletingAll(false)}
+          onDeleted={() => {
+            setDeletingAll(false);
+            setPage(1);
+            load();
+          }}
+        />
+      )}
     </div>
+  );
+}
+
+/**
+ * Issue #10: bulk delete-all of every user and their related rows. Requires
+ * the exact phrase DELETE ALL plus typing the exact current user count; the
+ * server re-checks the count inside the transactional delete.
+ */
+export function DeleteAllUsersModal({
+  app,
+  onClose,
+  onDeleted,
+}: {
+  app: AppInfo;
+  onClose: () => void;
+  onDeleted: () => void;
+}) {
+  const [phrase, setPhrase] = useState('');
+  const [total, setTotal] = useState<number | null>(null);
+  const [countInput, setCountInput] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  // Fetch the unfiltered user total fresh — a filtered list count would be wrong.
+  useEffect(() => {
+    api<Paged<UserSummary>>(`/apps/${app.id}/users`, { query: { page: 1, pageSize: 1 } })
+      .then((r) => setTotal(r.total))
+      .catch((err) => setError(validationDetails(err) ?? (err instanceof Error ? err.message : 'Count failed')));
+  }, [app.id]);
+
+  const valid = total !== null && deleteAllPhraseOk(phrase) && countConfirmOk(countInput, total);
+
+  const doDeleteAll = async (e: FormEvent) => {
+    e.preventDefault();
+    setBusy(true);
+    setError(null);
+    try {
+      await api(`/apps/${app.id}/users/delete-all`, {
+        method: 'POST',
+        body: { phrase, expectedCount: Number(countInput.trim()) },
+      });
+      onDeleted();
+    } catch (err) {
+      setError(validationDetails(err) ?? (err instanceof Error ? err.message : 'Delete-all failed'));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Modal title="Delete ALL users" onClose={onClose}>
+      <form onSubmit={doDeleteAll}>
+        <p className="warn-text">
+          This permanently deletes <strong>every user</strong> of {app.label}
+          {total !== null ? <> — currently <strong>{total.toLocaleString()}</strong> users</> : ''}{' '}
+          together with their related records (portfolios, transactions). This cannot be undone.
+        </p>
+        <label>Type <strong>DELETE ALL</strong> to confirm
+          <input value={phrase} onChange={(e) => setPhrase(e.target.value)} />
+        </label>
+        <label>Type the exact user count{total !== null ? <> (<strong>{total.toLocaleString()}</strong>)</> : ''} to confirm
+          <input value={countInput} onChange={(e) => setCountInput(e.target.value)} inputMode="numeric" />
+        </label>
+        <ErrorBox error={error} />
+        <div className="modal-actions">
+          <button type="button" className="link" onClick={onClose}>Cancel</button>
+          <button type="submit" className="danger" disabled={!valid || busy}>
+            {busy ? 'Deleting…' : 'Delete all users'}
+          </button>
+        </div>
+      </form>
+    </Modal>
   );
 }
 

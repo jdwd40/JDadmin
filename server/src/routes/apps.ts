@@ -87,10 +87,18 @@ const priceDeleteSchema = z.object({
 const priceResetSchema = z.object({
   assetId: z.string().max(64).optional(),
   phrase: z.literal('RESET', { errorMap: () => ({ message: 'Type RESET to confirm' }) }),
+  // Delete-all requires confirming the exact number of rows in scope (issue #10).
+  expectedCount: z.number().int().min(0),
 });
 
 const userDeleteSchema = z.object({
   confirmUsername: z.string().min(1),
+});
+
+/** Bulk delete-all users: exact phrase + exact current user count (issue #10). */
+const userDeleteAllSchema = z.object({
+  phrase: z.literal('DELETE ALL', { errorMap: () => ({ message: 'Type DELETE ALL to confirm' }) }),
+  expectedCount: z.number().int().min(0),
 });
 
 export function appsRouter(): Router {
@@ -274,6 +282,43 @@ export function appsRouter(): Router {
     }
   });
 
+  /**
+   * Issue #10: bulk delete-all users. Requires the destructive guard, the
+   * exact phrase DELETE ALL, and the exact current user count so an
+   * unfiltered production-wide delete can never run accidentally. The
+   * adapter performs the delete as one atomic transaction; FK/business
+   * failures roll everything back and surface as 409/400 with no audit entry.
+   */
+  r.post('/:appId/users/delete-all', requireCapability('users.deleteAll'), async (req, res, next) => {
+    try {
+      requireDestructiveEnabled(req);
+      const adapter = requireAdapter(req);
+      if (!adapter.deleteAllUsers) throw errors.unsupported('users.deleteAll');
+      const body = userDeleteAllSchema.parse(req.body);
+      const scope = await adapter.listUsers({ page: 1, pageSize: 1, order: 'asc', filters: {} });
+      if (body.expectedCount !== scope.total) {
+        throw errors.badRequest(
+          `Count confirmation mismatch: the app currently has ${scope.total} users; re-check the scope and confirm the exact total.`,
+        );
+      }
+      const result = await adapter.deleteAllUsers();
+      await getCtx(req).audit.record({
+        actorId: req.admin!.id,
+        actorUsername: req.admin!.username,
+        appId: adapter.id,
+        action: 'users.delete_all',
+        entityType: 'user',
+        entityId: null,
+        previous: { scope: 'all users', confirmedCount: body.expectedCount },
+        next: { deletedUsers: result.users, deletedRelated: result.related },
+        meta: clientMeta(req),
+      });
+      res.json({ ok: true, deletedUsers: result.users, deletedRelated: result.related });
+    } catch (err) {
+      next(err);
+    }
+  });
+
   // --- inventory ---
 
   r.get('/:appId/inventory', requireCapability('inventory.list'), async (req, res, next) => {
@@ -424,12 +469,42 @@ export function appsRouter(): Router {
     }
   });
 
+  /**
+   * Issue #10: individual price-history record delete. Destructive guard +
+   * capability gate; the deleted row is recorded (redacted) in the audit log.
+   */
+  r.delete('/:appId/price-history/:pointId', requireCapability('priceHistory.delete'), async (req, res, next) => {
+    try {
+      requireDestructiveEnabled(req);
+      const adapter = requireAdapter(req);
+      if (!adapter.deletePricePoint) throw errors.unsupported('priceHistory.delete');
+      const deleted = await adapter.deletePricePoint(req.params.pointId!);
+      await getCtx(req).audit.record({
+        actorId: req.admin!.id,
+        actorUsername: req.admin!.username,
+        appId: adapter.id,
+        action: 'price_history.delete',
+        entityType: 'price_history',
+        entityId: req.params.pointId!,
+        previous: deleted,
+        meta: clientMeta(req),
+      });
+      res.json({ ok: true, deleted });
+    } catch (err) {
+      next(err);
+    }
+  });
+
   r.post('/:appId/price-history/delete-range', requireCapability('priceHistory.deleteRange'), async (req, res, next) => {
     try {
       requireDestructiveEnabled(req);
       const adapter = requireAdapter(req);
       if (!adapter.deletePriceHistoryRange) throw errors.unsupported('priceHistory.deleteRange');
       const body = priceDeleteSchema.parse(req.body);
+      // Unfiltered deletes must go through the count-confirmed reset path.
+      if (!body.assetId && !body.from && !body.to) {
+        throw errors.badRequest('A filter (asset or date range) is required for delete-range');
+      }
       const count = await adapter.countPriceHistory(body);
       const deleted = await adapter.deletePriceHistoryRange(body);
       await getCtx(req).audit.record({
@@ -455,6 +530,14 @@ export function appsRouter(): Router {
       const adapter = requireAdapter(req);
       if (!adapter.resetPriceHistory) throw errors.unsupported('priceHistory.reset');
       const body = priceResetSchema.parse(req.body);
+      // Delete-all is only allowed when the operator confirms the exact
+      // number of rows currently in scope (issue #10).
+      const scopeCount = await adapter.countPriceHistory({ assetId: body.assetId });
+      if (body.expectedCount !== scopeCount) {
+        throw errors.badRequest(
+          `Count confirmation mismatch: ${scopeCount} price-history rows are in scope; re-check the scope and confirm the exact total.`,
+        );
+      }
       const deleted = await adapter.resetPriceHistory(body.assetId);
       await getCtx(req).audit.record({
         actorId: req.admin!.id,
@@ -463,6 +546,7 @@ export function appsRouter(): Router {
         action: 'price_history.reset',
         entityType: 'price_history',
         entityId: body.assetId ?? 'all',
+        previous: { scope: body.assetId ?? 'all', confirmedCount: body.expectedCount },
         next: { deleted },
         meta: clientMeta(req),
       });

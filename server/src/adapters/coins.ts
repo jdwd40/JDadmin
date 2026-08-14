@@ -8,6 +8,7 @@ import type {
   AppResourceUsage,
   AssetInfo,
   CapabilitySet,
+  DeleteAllUsersResult,
   InventoryInput,
   InventoryItem,
   ListQuery,
@@ -86,6 +87,8 @@ export const coinsCapabilities: CapabilitySet = {
     disable: false,
     resetPassword: true,
     delete: true,
+    // Transactional delete-all across users + portfolios + transactions.
+    deleteAll: true,
   },
   inventory: { list: true, create: true, update: true, delete: true },
   transactions: {
@@ -96,7 +99,7 @@ export const coinsCapabilities: CapabilitySet = {
     update: false,
     delete: false,
   },
-  priceHistory: { list: true, stats: true, deleteRange: true, reset: true },
+  priceHistory: { list: true, stats: true, delete: true, deleteRange: true, reset: true },
   overview: true,
   health: true,
 };
@@ -350,6 +353,26 @@ export class CoinsAdapter implements AppAdapter {
       await client.query(`DELETE FROM ${this.T.portfolios} WHERE user_id = $1`, [id]);
       await client.query(`DELETE FROM ${this.T.transactions} WHERE user_id = $1`, [id]);
       await client.query(`DELETE FROM ${this.T.users} WHERE user_id = $1`, [id]);
+    });
+  }
+
+  /**
+   * Issue #10: transactional delete-all of every user and their related
+   * portfolios/transactions. One atomic transaction — any FK or business
+   * error rolls back the whole operation with no partial delete.
+   */
+  async deleteAllUsers(): Promise<DeleteAllUsersResult> {
+    return this.db.transaction(async (client) => {
+      const portfolios = await client.query(`DELETE FROM ${this.T.portfolios}`);
+      const transactions = await client.query(`DELETE FROM ${this.T.transactions}`);
+      const users = await client.query(`DELETE FROM ${this.T.users}`);
+      return {
+        users: users.rowCount ?? 0,
+        related: {
+          portfolios: portfolios.rowCount ?? 0,
+          transactions: transactions.rowCount ?? 0,
+        },
+      };
     });
   }
 
@@ -710,12 +733,33 @@ export class CoinsAdapter implements AppAdapter {
   async countPriceHistory(filter: { assetId?: string; from?: string; to?: string }): Promise<number> {
     const params: unknown[] = [];
     const where = this.priceFilterSql(filter, params);
-    if (!where) throw new ApiError(400, 'BAD_REQUEST', 'A filter (asset or date range) is required');
     const res = await this.db.query<{ count: string }>(
       `SELECT count(*)::text AS count FROM ${this.T.priceHistory} ${where}`,
       params,
     );
     return Number(res.rows[0]?.count ?? 0);
+  }
+
+  /** Issue #10: individual price-history record delete; returns the deleted point. */
+  async deletePricePoint(id: string): Promise<PricePoint> {
+    const res = await this.db.query<{
+      history_id: number;
+      coin_id: number;
+      price: string;
+      created_at: Date;
+    }>(
+      `DELETE FROM ${this.T.priceHistory} WHERE history_id = $1
+       RETURNING history_id, coin_id, price::text, created_at`,
+      [id],
+    );
+    const row = res.rows[0];
+    if (!row) throw new ApiError(404, 'NOT_FOUND', 'Price history record not found');
+    return {
+      id: String(row.history_id),
+      assetId: String(row.coin_id),
+      price: Number(row.price),
+      recordedAt: new Date(row.created_at).toISOString(),
+    };
   }
 
   async deletePriceHistoryRange(filter: { assetId?: string; from?: string; to?: string }): Promise<number> {

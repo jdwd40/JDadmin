@@ -1,7 +1,7 @@
 import { FormEvent, useCallback, useEffect, useState } from 'react';
 import { api, validationDetails } from '../api';
 import { ErrorBox, fmtDate, fmtNum, Modal, Pager } from '../components/common';
-import { deleteRangeValid, resetPhraseOk } from '../lib/confirm';
+import { countConfirmOk, deleteRangeValid, resetPhraseOk } from '../lib/confirm';
 import type { AppInfo, AssetInfo, Paged, PricePoint, PriceStats } from '../types';
 
 const PAGE_SIZE = 25;
@@ -22,6 +22,7 @@ export function PriceHistory({ app }: { app: AppInfo }) {
   const [error, setError] = useState<unknown>(null);
   const [deletingRange, setDeletingRange] = useState(false);
   const [resetting, setResetting] = useState(false);
+  const [deletingPoint, setDeletingPoint] = useState<PricePoint | null>(null);
 
   const load = useCallback(async () => {
     setError(null);
@@ -111,7 +112,7 @@ export function PriceHistory({ app }: { app: AppInfo }) {
       </div>
       <ErrorBox error={error} />
       <table>
-        <thead><tr><th>ID</th><th>Asset</th><th>Price</th><th>Recorded</th></tr></thead>
+        <thead><tr><th>ID</th><th>Asset</th><th>Price</th><th>Recorded</th>{caps.delete && <th>Actions</th>}</tr></thead>
         <tbody>
           {(data?.items ?? []).map((p) => (
             <tr key={p.id}>
@@ -119,9 +120,14 @@ export function PriceHistory({ app }: { app: AppInfo }) {
               <td>{p.assetId}</td>
               <td>{fmtNum(p.price)}</td>
               <td>{fmtDate(p.recordedAt)}</td>
+              {caps.delete && (
+                <td>
+                  <button className="link danger-text" onClick={() => setDeletingPoint(p)}>Delete</button>
+                </td>
+              )}
             </tr>
           ))}
-          {data && data.items.length === 0 && <tr><td colSpan={4} className="muted">No price points.</td></tr>}
+          {data && data.items.length === 0 && <tr><td colSpan={caps.delete ? 5 : 4} className="muted">No price points.</td></tr>}
         </tbody>
       </table>
       <Pager page={page} pageSize={PAGE_SIZE} total={data?.total ?? 0} onPage={setPage} />
@@ -141,7 +147,60 @@ export function PriceHistory({ app }: { app: AppInfo }) {
           onDone={() => { setResetting(false); load(); loadStats(); }}
         />
       )}
+      {deletingPoint && (
+        <DeletePointModal
+          app={app}
+          point={deletingPoint}
+          onClose={() => setDeletingPoint(null)}
+          onDeleted={() => { setDeletingPoint(null); load(); loadStats(); }}
+        />
+      )}
     </div>
+  );
+}
+
+/** Issue #10: individual record delete with an explicit confirm step. */
+function DeletePointModal({
+  app,
+  point,
+  onClose,
+  onDeleted,
+}: {
+  app: AppInfo;
+  point: PricePoint;
+  onClose: () => void;
+  onDeleted: () => void;
+}) {
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const doDelete = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      await api(`/apps/${app.id}/price-history/${point.id}`, { method: 'DELETE' });
+      onDeleted();
+    } catch (err) {
+      setError(validationDetails(err) ?? (err instanceof Error ? err.message : 'Delete failed'));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Modal title={`Delete price point ${point.id}`} onClose={onClose}>
+      <p>
+        This permanently deletes the price-history record for asset <strong>{point.assetId}</strong>{' '}
+        at <strong>{fmtNum(point.price)}</strong> recorded {fmtDate(point.recordedAt)}. This cannot be undone.
+      </p>
+      <ErrorBox error={error} />
+      <div className="modal-actions">
+        <button className="link" onClick={onClose}>Cancel</button>
+        <button className="danger" disabled={busy} onClick={doDelete}>
+          {busy ? 'Deleting…' : 'Delete record'}
+        </button>
+      </div>
+    </Modal>
   );
 }
 
@@ -230,15 +289,28 @@ function DeleteRangeModal({
 
 function ResetModal({ app, onClose, onDone }: { app: AppInfo; onClose: () => void; onDone: () => void }) {
   const [phrase, setPhrase] = useState('');
+  const [count, setCount] = useState<number | null>(null);
+  const [countInput, setCountInput] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+
+  // Issue #10: show the exact in-scope row count and require the operator to
+  // type it back; the server re-checks it at execution time.
+  useEffect(() => {
+    api<{ count: number }>(`/apps/${app.id}/price-history/count`)
+      .then((r) => setCount(r.count))
+      .catch((err) => setError(validationDetails(err) ?? (err instanceof Error ? err.message : 'Count failed')));
+  }, [app.id]);
 
   const doReset = async (e: FormEvent) => {
     e.preventDefault();
     setBusy(true);
     setError(null);
     try {
-      await api(`/apps/${app.id}/price-history/reset`, { method: 'POST', body: { phrase } });
+      await api(`/apps/${app.id}/price-history/reset`, {
+        method: 'POST',
+        body: { phrase, expectedCount: Number(countInput.trim()) },
+      });
       onDone();
     } catch (err) {
       setError(validationDetails(err) ?? (err instanceof Error ? err.message : 'Reset failed'));
@@ -247,19 +319,26 @@ function ResetModal({ app, onClose, onDone }: { app: AppInfo; onClose: () => voi
     }
   };
 
+  const valid = count !== null && resetPhraseOk(phrase) && countConfirmOk(countInput, count);
+
   return (
     <Modal title="Reset all price history" onClose={onClose}>
       <form onSubmit={doReset}>
         <p className="warn-text">
-          This deletes every price-history row for {app.label}. Other tables are untouched.
+          This deletes every price-history row for {app.label}
+          {count !== null ? <> — currently <strong>{count.toLocaleString()}</strong> rows</> : ''}.
+          Other tables are untouched.
         </p>
         <label>Type <strong>RESET</strong> to confirm
           <input value={phrase} onChange={(e) => setPhrase(e.target.value)} />
         </label>
+        <label>Type the exact row count{count !== null ? <> (<strong>{count.toLocaleString()}</strong>)</> : ''} to confirm
+          <input value={countInput} onChange={(e) => setCountInput(e.target.value)} inputMode="numeric" />
+        </label>
         <ErrorBox error={error} />
         <div className="modal-actions">
           <button type="button" className="link" onClick={onClose}>Cancel</button>
-          <button type="submit" className="danger" disabled={!resetPhraseOk(phrase) || busy}>
+          <button type="submit" className="danger" disabled={!valid || busy}>
             {busy ? 'Resetting…' : 'Reset price history'}
           </button>
         </div>

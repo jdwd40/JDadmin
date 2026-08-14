@@ -30,3 +30,17 @@ export function deleteRangeValid(form: DeleteRangeForm): boolean {
   const hasFilter = Boolean(form.assetId || form.from || form.to);
   return hasFilter && confirmChecked(form.confirm);
 }
+
+/** Delete-all users requires the exact phrase DELETE ALL. */
+export function deleteAllPhraseOk(input: string): boolean {
+  return input.trim() === 'DELETE ALL';
+}
+
+/**
+ * Unfiltered destructive operations additionally require typing the exact
+ * number of rows currently in scope (issue #10). The server re-checks the
+ * count at execution time.
+ */
+export function countConfirmOk(input: string, expected: number): boolean {
+  return /^\d+$/.test(input.trim()) && Number(input.trim()) === expected;
+}

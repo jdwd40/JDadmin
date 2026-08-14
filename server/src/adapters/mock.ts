@@ -5,6 +5,7 @@ import type {
   AppResourceUsage,
   AssetInfo,
   CapabilitySet,
+  DeleteAllUsersResult,
   InventoryInput,
   InventoryItem,
   ListQuery,
@@ -39,10 +40,10 @@ interface MockUser {
 }
 
 const fullCapabilities: CapabilitySet = {
-  users: { list: true, get: true, create: true, update: true, disable: true, resetPassword: true, delete: true },
+  users: { list: true, get: true, create: true, update: true, disable: true, resetPassword: true, delete: true, deleteAll: true },
   inventory: { list: true, create: true, update: true, delete: true },
   transactions: { list: true, create: true, update: false, delete: false },
-  priceHistory: { list: true, stats: true, deleteRange: true, reset: true },
+  priceHistory: { list: true, stats: true, delete: true, deleteRange: true, reset: true },
   overview: true,
   health: true,
 };
@@ -259,6 +260,18 @@ export class MockAdapter implements AppAdapter {
     this.transactions = this.transactions.filter((t) => t.userId !== id);
   }
 
+  /** Issue #10: delete every user and their related rows in one operation. */
+  async deleteAllUsers(): Promise<DeleteAllUsersResult> {
+    const result: DeleteAllUsersResult = {
+      users: this.users.length,
+      related: { inventory: this.inventory.length, transactions: this.transactions.length },
+    };
+    this.users = [];
+    this.inventory = [];
+    this.transactions = [];
+    return result;
+  }
+
   async listInventory(userId: string | undefined, query: ListQuery): Promise<Paged<InventoryItem>> {
     let items = this.inventory;
     if (userId) items = items.filter((i) => i.userId === userId);
@@ -376,6 +389,14 @@ export class MockAdapter implements AppAdapter {
         (!filter.from || p.recordedAt >= filter.from) &&
         (!filter.to || p.recordedAt <= filter.to),
     ).length;
+  }
+
+  /** Issue #10: individual price-history record delete; returns the deleted point. */
+  async deletePricePoint(id: string): Promise<PricePoint> {
+    const idx = this.prices.findIndex((p) => p.id === id);
+    if (idx < 0) throw new ApiError(404, 'NOT_FOUND', 'Price history record not found');
+    const [point] = this.prices.splice(idx, 1);
+    return point!;
   }
 
   async deletePriceHistoryRange(filter: { assetId?: string; from?: string; to?: string }): Promise<number> {

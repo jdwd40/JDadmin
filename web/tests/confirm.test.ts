@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   confirmChecked,
+  countConfirmOk,
+  deleteAllPhraseOk,
   deleteRangeValid,
   resetPhraseOk,
   usernameConfirmOk,
@@ -32,5 +34,24 @@ describe('destructive confirmation dialogs', () => {
   it('confirm checkbox must be exactly true', () => {
     expect(confirmChecked(true)).toBe(true);
     expect(confirmChecked(false)).toBe(false);
+  });
+
+  it('delete-all users accepts only the exact phrase DELETE ALL (issue #10)', () => {
+    expect(deleteAllPhraseOk('DELETE ALL')).toBe(true);
+    expect(deleteAllPhraseOk(' DELETE ALL ')).toBe(true); // surrounding whitespace tolerated
+    expect(deleteAllPhraseOk('delete all')).toBe(false);
+    expect(deleteAllPhraseOk('DELETE')).toBe(false);
+    expect(deleteAllPhraseOk('')).toBe(false);
+  });
+
+  it('count confirmation requires typing the exact in-scope total (issue #10)', () => {
+    expect(countConfirmOk('42', 42)).toBe(true);
+    expect(countConfirmOk(' 42 ', 42)).toBe(true);
+    expect(countConfirmOk('0', 0)).toBe(true);
+    expect(countConfirmOk('41', 42)).toBe(false);
+    expect(countConfirmOk('42.0', 42)).toBe(false);
+    expect(countConfirmOk('-1', -1)).toBe(false);
+    expect(countConfirmOk('abc', 42)).toBe(false);
+    expect(countConfirmOk('', 0)).toBe(false);
   });
 });

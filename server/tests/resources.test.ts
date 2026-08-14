@@ -201,6 +201,43 @@ describe('resource measurement helpers', () => {
       }
     });
 
+    it('recognizes the space-joined Node process-title cmdline form (issue #23)', async () => {
+      const root = await makeProcRoot({
+        // Live Coins cmdline: one NUL token holding the space-joined title.
+        '600': { cmdline: `node ${coins.commandPath}\0`, status: statusWithRss(4096) },
+        '999': { cmdline: 'postgres\0-D\0/var/lib/pg\0', status: statusWithRss(1) },
+      });
+      try {
+        const s = await measureAppProcessMemory(coins, root);
+        expect(s).toMatchObject({
+          status: 'ok',
+          usedBytes: 4096 * 1024,
+          availableBytes: null,
+          totalBytes: null,
+          percentUsed: null,
+          reason: null,
+        });
+      } finally {
+        await fs.rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it('process-title matching stays exact: title substrings/lookalikes do not match (issue #23)', async () => {
+      const root = await makeProcRoot({
+        '700': { cmdline: `node ${coins.commandPath}.bak\0`, status: statusWithRss(100) },
+        '701': { cmdline: `node /home/jd/back_coins_x\0`, status: statusWithRss(100) },
+        '702': { cmdline: `xx${coins.commandPath} node\0`, status: statusWithRss(100) },
+      });
+      try {
+        const s = await measureAppProcessMemory(coins, root);
+        expect(s.status).toBe('unavailable');
+        expect(s.reason).toBe('process not found');
+        expect(s.usedBytes).toBeNull();
+      } finally {
+        await fs.rm(root, { recursive: true, force: true });
+      }
+    });
+
     it('reports process not found when no process matches', async () => {
       const root = await makeProcRoot({ '1': { cmdline: 'sbin/init\0', status: statusWithRss(10) } });
       try {

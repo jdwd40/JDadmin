@@ -173,8 +173,34 @@ export const APP_PROCESS_IDENTITIES = {
 } as const satisfies Record<string, AppProcessIdentity>;
 
 /**
+ * True when `cmdline` (raw /proc cmdline content) identifies `commandPath`.
+ *
+ * Two forms are recognized, both with exact whole-token matching only:
+ *
+ * 1. Normal argv: `commandPath` appears as an exact NUL-separated token.
+ * 2. Node process-title form (issue #23): a process that has overwritten
+ *    its title (Linux process-title semantics, e.g. Node `process.title`)
+ *    exposes its whole command line as ONE space-joined NUL token, e.g.
+ *    `node /home/jd/back_coins_x/server.js\0`. Only that single-token
+ *    shape is treated as a title and split on spaces; `commandPath` must
+ *    still match as an exact, whole space-separated token.
+ *
+ * Multi-token cmdlines are never space-split, so embedded-path commands
+ * (`bash -c "… server.js"`), lookalike paths, and substrings never match.
+ */
+function cmdlineMatchesCommandPath(cmdline: string, commandPath: string): boolean {
+  const args = cmdline.split('\0').filter((arg) => arg !== '');
+  if (args.some((arg) => arg === commandPath)) return true;
+  if (args.length === 1) {
+    return (args[0] as string).split(' ').some((token) => token === commandPath);
+  }
+  return false;
+}
+
+/**
  * List PIDs under `procRoot` whose cmdline contains `commandPath` as an exact
- * argv token. Entries that vanish or cannot be read mid-scan are skipped
+ * argv token (or as an exact space-separated token of a single-token Node
+ * process title). Entries that vanish or cannot be read mid-scan are skipped
  * (they are not confirmed matches), matching read-only /proc semantics.
  */
 async function findPidsByCommandPath(procRoot: string, commandPath: string): Promise<string[]> {
@@ -188,7 +214,7 @@ async function findPidsByCommandPath(procRoot: string, commandPath: string): Pro
     } catch {
       continue; // process exited or is unreadable: not a confirmed match
     }
-    if (cmdline.split('\0').some((arg) => arg === commandPath)) matches.push(name);
+    if (cmdlineMatchesCommandPath(cmdline, commandPath)) matches.push(name);
   }
   return matches;
 }

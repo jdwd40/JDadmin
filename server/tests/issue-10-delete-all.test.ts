@@ -211,8 +211,9 @@ describe('issue #10: Dwarf provisioned price-history functions', () => {
       deleteRange: true,
       reset: true,
     });
-    // Users stay honestly undeletable (FK graph cascades into the ledger).
-    expect(dwarf.capabilities.users.delete).toBe(false);
+    // Individual user delete is supported since issue #11; delete-all stays
+    // off (the calling principal is in scope and self-delete is refused).
+    expect(dwarf.capabilities.users.delete).toBe(true);
     expect(dwarf.capabilities.users.deleteAll).toBe(false);
 
     const delAll = await authed(request(h.app).post('/api/apps/dwarf/users/delete-all')).send({

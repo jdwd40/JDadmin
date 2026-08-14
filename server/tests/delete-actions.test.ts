@@ -105,13 +105,13 @@ describe('issue #1: delete-action regression (Coins + Dwarf harness)', () => {
     expect(await destructiveAuditCount(h)).toBe(before);
   });
 
-  it('unsupported adapter (Dwarf) delete is an honest 403 with no audit event', async () => {
+  it('unsupported adapter capability (Dwarf user delete-all) is an honest 403 with no audit event', async () => {
     const before = await destructiveAuditCount(h, 'dwarf');
-    const del = await authed(
-      request(h.app).delete('/api/apps/dwarf/users/11111111-1111-1111-1111-111111111111'),
-    ).send({ confirmUsername: 'DwarfOne' });
-    expect(del.status).toBe(403);
-    expect(del.body.error.code).toBe('UNSUPPORTED_CAPABILITY');
+    const delAll = await authed(
+      request(h.app).post('/api/apps/dwarf/users/delete-all'),
+    ).send({ phrase: 'DELETE ALL', expectedCount: 1 });
+    expect(delAll.status).toBe(403);
+    expect(delAll.body.error.code).toBe('UNSUPPORTED_CAPABILITY');
     expect(await destructiveAuditCount(h, 'dwarf')).toBe(before);
   });
 

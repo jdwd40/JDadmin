@@ -13,6 +13,7 @@ import type {
   PriceHistoryQuery,
   PricePoint,
   PriceStats,
+  RelatedCounts,
   TransactionItem,
   UserCreateInput,
   UserDetail,
@@ -47,10 +48,23 @@ import type {
  * own access latch honoured by every login/session path) plus refresh-session
  * revocation, through public.jdadmin_admin_set_user_disabled.
  *
- * User deletion remains UNSUPPORTED: profiles.id anchors engine-owned wallets,
- * holdings, limit orders and the append-only transactions ledger via cascading
- * FKs, and Dwarf has no delete-user function. Deleting would destroy financial
- * history, so the capability stays false instead of being faked.
+ * User deletion IS supported (issue #11) via the provisioned SECURITY DEFINER
+ * function public.jdadmin_admin_delete_user (ops/dwarf/004_jdadmin_user_delete.sql).
+ * The self-hosted FK graph was verified before enabling this: profiles.id ->
+ * app_auth.users(id) ON DELETE CASCADE, and every FK referencing profiles(id)
+ * is ON DELETE CASCADE (wallets, holdings, transactions ledger, limit orders,
+ * mining jobs, cooldowns, leaderboard cache); public_feed.user_id and
+ * app_auth.auth_events.user_id are ON DELETE SET NULL, so feed rows and the
+ * append-only auth audit survive anonymized. The product owner explicitly
+ * accepts destroying the deleted user's related history/financial records.
+ * The wrapper counts dependents first (truthful counts), records a redacted
+ * app-side auth event, refuses to delete the calling control-plane principal,
+ * and the whole graph deletes atomically in the caller's transaction.
+ *
+ * Delete-ALL users stays UNSUPPORTED: the calling control-plane principal is
+ * itself a row in that scope and the self-delete guard makes an honest full
+ * delete-all impossible — and wiping every engine user is not an operation
+ * Dwarf supports.
  *
  * Price-history deletion IS supported (issue #10) via the provisioned
  * SECURITY DEFINER functions in ops/dwarf/003_jdadmin_price_history_admin.sql.
@@ -65,9 +79,17 @@ const T = {
   wallets: 'public.wallets',
   holdings: 'public.portfolio_holdings',
   transactions: 'public.transactions',
+  limitOrders: 'public.limit_orders',
+  miningJobs: 'public.mining_jobs',
+  cooldowns: 'public.player_action_cooldowns',
+  leaderboard: 'public.leaderboard_cache',
+  publicFeed: 'public.public_feed',
   priceHistory: 'public.price_history',
   gems: 'public.gems',
   authUsers: 'app_auth.users',
+  identities: 'app_auth.identities',
+  refreshSessions: 'app_auth.refresh_sessions',
+  passwordResetTokens: 'app_auth.password_reset_tokens',
 } as const;
 
 export function dwarfCapabilities(argon2Available: boolean, adminPrincipalConfigured = true): CapabilitySet {
@@ -84,8 +106,12 @@ export function dwarfCapabilities(argon2Available: boolean, adminPrincipalConfig
       // plus refresh-session revocation.
       disable: enabled,
       resetPassword: enabled && argon2Available,
-      delete: false, // engine/auth FK graph: would cascade into the append-only ledger
-      deleteAll: false, // same FK graph; no safe delete-user function exists
+      // Via jdadmin_admin_delete_user → app_auth.users DELETE with the
+      // verified CASCADE/SET NULL FK graph (issue #11, ops/dwarf/004).
+      delete: enabled,
+      // Not provided: the caller's own principal is in scope and the
+      // self-delete guard makes an honest full delete-all impossible.
+      deleteAll: false,
     },
     inventory: { list: enabled, create: false, update: false, delete: false },
     transactions: { list: enabled, create: false, update: false, delete: false },
@@ -408,6 +434,53 @@ export class DwarfAdapter implements AppAdapter {
       [id, hash],
     );
     if (!res.rows[0]?.ok) throw new ApiError(404, 'NOT_FOUND', 'Auth user not found');
+  }
+
+  /**
+   * Issue #11: counts of every dependent row the cascading delete removes
+   * (or anonymizes, for public_feed). Shown to the operator in the delete
+   * confirmation and recorded in the audit log alongside the deletion.
+   */
+  async userRelatedCounts(id: string): Promise<RelatedCounts> {
+    await this.getUser(id);
+    const tables: Array<[string, string]> = [
+      ['wallets', T.wallets],
+      ['portfolio_holdings', T.holdings],
+      ['transactions', T.transactions],
+      ['limit_orders', T.limitOrders],
+      ['mining_jobs', T.miningJobs],
+      ['player_action_cooldowns', T.cooldowns],
+      ['leaderboard_cache', T.leaderboard],
+      ['public_feed_anonymized', T.publicFeed],
+      ['identities', T.identities],
+      ['refresh_sessions', T.refreshSessions],
+      ['password_reset_tokens', T.passwordResetTokens],
+    ];
+    const counts: Record<string, number> = {};
+    for (const [label, table] of tables) {
+      const res = await this.query<{ count: string }>(
+        `SELECT count(*)::text AS count FROM ${table} WHERE user_id = $1`,
+        [id],
+      );
+      counts[label] = Number(res.rows[0]?.count ?? 0);
+    }
+    return counts;
+  }
+
+  /**
+   * Issue #11: controlled hard delete via the provisioned
+   * jdadmin_admin_delete_user SECURITY DEFINER function. The function
+   * re-checks assert_admin_caller(), refuses self-delete of the control-plane
+   * principal, records a redacted app-side auth event, and deletes the whole
+   * verified FK graph atomically in the transaction-local admin context; any
+   * failure raises and rolls everything back (surfaced as 4xx by the core).
+   */
+  async deleteUser(id: string): Promise<void> {
+    if (this.adminPrincipalId && id === this.adminPrincipalId) {
+      throw new ApiError(400, 'BAD_REQUEST', 'Refusing to delete the calling admin principal');
+    }
+    await this.getUser(id);
+    await this.query(`SELECT public.jdadmin_admin_delete_user($1)`, [id]);
   }
 
   async listInventory(userId: string | undefined, query: ListQuery): Promise<Paged<import('./types.js').InventoryItem>> {

@@ -16,10 +16,10 @@
 -- (transaction-local app.user_id must map to profiles.role='admin'), and are
 -- granted to dc_api only.
 --
--- Deliberately NOT provided: user deletion. profiles/id anchors cascade into
--- engine-owned wallets, holdings, limit orders and the append-only
--- transactions ledger; Dwarf has no delete-user function and adding one would
--- destroy financial history. Disable is the supported alternative.
+-- Deliberately NOT provided here: user deletion. That arrived separately in
+-- 004_jdadmin_user_delete.sql (issue #11) after the self-hosted FK graph was
+-- verified all-CASCADE/SET NULL and the product owner accepted destroying the
+-- deleted user's related history/financial records.
 
 BEGIN;
 

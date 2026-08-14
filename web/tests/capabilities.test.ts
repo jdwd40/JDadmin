@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { AppInfo, CapabilitySet } from '../src/types';
 import { capabilityOf, NAV_ITEMS, resolveNav, selectableApps } from '../src/lib/capabilities';
+import { usernameConfirmOk } from '../src/lib/confirm';
 
 const full: CapabilitySet = {
   users: { list: true, get: true, create: true, update: true, disable: true, resetPassword: true, delete: true, deleteAll: true },
@@ -62,13 +63,15 @@ describe('resolveNav (capability-aware navigation)', () => {
   });
 });
 
-describe('destructive capability gating (issues #1 + #10)', () => {
+describe('destructive capability gating (issues #1 + #10 + #11)', () => {
   // Mirrors the server-side Coins vs Dwarf capability split. Since issue #10
-  // Dwarf supports price-history deletes (provisioned functions) but still
-  // cannot delete users (FK graph cascades into the append-only ledger).
+  // Dwarf supports price-history deletes (provisioned functions), and since
+  // issue #11 individual user delete (jdadmin_admin_delete_user); delete-all
+  // users stays off because the calling principal is in scope and the
+  // self-delete guard makes an honest full delete-all impossible.
   const dwarfLike: CapabilitySet = {
     ...full,
-    users: { ...full.users, delete: false, deleteAll: false, disable: true, create: true },
+    users: { ...full.users, delete: true, deleteAll: false, disable: true, create: true },
   };
 
   it('delete/reset paths gate on the declared capability', () => {
@@ -77,11 +80,21 @@ describe('destructive capability gating (issues #1 + #10)', () => {
     expect(capabilityOf(full, 'priceHistory.delete')).toBe(true);
     expect(capabilityOf(full, 'priceHistory.deleteRange')).toBe(true);
     expect(capabilityOf(full, 'priceHistory.reset')).toBe(true);
-    expect(capabilityOf(dwarfLike, 'users.delete')).toBe(false);
+    expect(capabilityOf(dwarfLike, 'users.delete')).toBe(true);
     expect(capabilityOf(dwarfLike, 'users.deleteAll')).toBe(false);
     expect(capabilityOf(dwarfLike, 'priceHistory.delete')).toBe(true);
     expect(capabilityOf(dwarfLike, 'priceHistory.deleteRange')).toBe(true);
     expect(capabilityOf(dwarfLike, 'priceHistory.reset')).toBe(true);
+  });
+
+  it('issue #11: user-delete confirmation requires the exact username', () => {
+    // DeleteUserModal gates submission on usernameConfirmOk; the server
+    // independently re-checks confirmUsername before deleting.
+    expect(usernameConfirmOk('DwarfOne', 'DwarfOne')).toBe(true);
+    expect(usernameConfirmOk('dwarfone', 'DwarfOne')).toBe(false);
+    expect(usernameConfirmOk('', 'DwarfOne')).toBe(false);
+    // With deleteAll off, the count-confirmation path is never reachable.
+    expect(capabilityOf(dwarfLike, 'users.deleteAll')).toBe(false);
   });
 });
 

@@ -37,8 +37,8 @@ be called for something it said it cannot do.
 | users list/get/update/resetPassword | ✓ | ✓ | ✓ |
 | users create | ✓ | ✓ (provisioned `jdadmin_admin_create_user` → `app_auth.register_user`, the app's own registration flow) | ✓ |
 | users disable | ✗ (no column; schema must not be migrated) | ✓ (`app_auth.users.disabled_at` + refresh-session revocation) | ✓ |
-| users delete (+ related counts) | ✓ cascade | ✗ (engine/auth FK graph cascades into the append-only ledger; no safe function exists — disable instead) | ✓ |
-| users deleteAll (transactional, phrase + exact-count confirmed) | ✓ one transaction over portfolios → transactions → users, full rollback on FK errors | ✗ (same FK graph as user delete) | ✓ |
+| users delete (+ related counts) | ✓ cascade | ✓ (provisioned `jdadmin_admin_delete_user`; verified CASCADE/SET NULL FK graph, self-delete refused, redacted app-side auth event) | ✓ |
+| users deleteAll (transactional, phrase + exact-count confirmed) | ✓ one transaction over portfolios → transactions → users, full rollback on FK errors | ✗ (the calling control-plane principal is itself in scope and the self-delete guard makes an honest full delete-all impossible; wiping every engine user is not a Dwarf-supported operation) | ✓ |
 | inventory list | ✓ portfolios | ✓ holdings (read-only) | ✓ |
 | inventory create/update/delete | ✓ | ✗ (engine owns writes) | ✓ |
 | transactions list | ✓ | ✓ (read-only) | ✓ |
@@ -58,7 +58,16 @@ adapter calls (granted to `dc_api` only). Dwarf's `priceHistory.delete`/
 `deleteRange`/`reset` additionally require `ops/dwarf/003_jdadmin_price_history_admin.sql`
 (issue #10); those wrappers re-check `public.assert_admin_caller()` and mirror
 the engine's own `prune_old_data` retention deletes — engine-owned OHLC
-aggregates and the transactions ledger are never touched.
+aggregates and the transactions ledger are never touched. Dwarf's
+`users.delete` additionally requires `ops/dwarf/004_jdadmin_user_delete.sql`
+(issue #11); the wrapper counts all dependents first (truthful related
+counts), records a redacted `admin_deleted_user` auth event attributed to the
+calling principal, refuses to delete that principal, and deletes the
+`app_auth.users` row so the verified FK graph cascades atomically (profile,
+wallet, holdings, ledger rows, limit orders, mining jobs, cooldowns,
+leaderboard cache, identities, sessions, reset tokens; `public_feed` and
+`auth_events` rows survive anonymized via `ON DELETE SET NULL`). Any failure
+rolls the whole transaction back.
 
 Issue #10 delete-all operations (`users.deleteAll`, `priceHistory.reset`) are
 never unfiltered at the HTTP layer: they require the destructive guard, an

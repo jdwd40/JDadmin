@@ -6,11 +6,12 @@ import { dwarfCapabilities } from '../src/adapters/dwarf.js';
 import { adminUrlFor, createHarness, TestHarness } from './helpers.js';
 
 /**
- * Issue #2 regression suite: Dwarf user create / edit / disable / delete.
- * Create delegates to the app's own registration flow via the provisioned
+ * Issue #2 regression suite: Dwarf user create / edit / disable. Create
+ * delegates to the app's own registration flow via the provisioned
  * jdadmin_admin_create_user wrapper; disable uses the schema's disabled_at
- * latch plus session revocation; delete stays honestly unsupported because the
- * engine/auth FK graph would cascade into the append-only ledger.
+ * latch plus session revocation. Delete became supported in issue #11 via
+ * jdadmin_admin_delete_user (see dwarf-user-delete.test.ts); this suite only
+ * asserts the capability advertisement and the self-delete guard.
  */
 
 const PRINCIPAL = '11111111-1111-1111-1111-111111111111';
@@ -36,8 +37,8 @@ describe('Dwarf capability flags (unit)', () => {
     expect(caps.users.update).toBe(true);
     expect(caps.users.disable).toBe(true);
     expect(caps.users.resetPassword).toBe(true);
-    expect(caps.users.delete).toBe(false);
-    expect(caps.users.deleteAll).toBe(false);
+    expect(caps.users.delete).toBe(true); // issue #11: jdadmin_admin_delete_user
+    expect(caps.users.deleteAll).toBe(false); // self-delete guard: caller is in scope
     // Issue #10: price-history deletes are supported via provisioned wrappers.
     expect(caps.priceHistory.delete).toBe(true);
     expect(caps.priceHistory.deleteRange).toBe(true);
@@ -86,7 +87,7 @@ describe('issue #2: Dwarf user administration (disposable DB)', () => {
       update: true,
       disable: true,
       resetPassword: true,
-      delete: false,
+      delete: true, // issue #11
       deleteAll: false,
     });
   });
@@ -315,12 +316,14 @@ describe('issue #2: Dwarf user administration (disposable DB)', () => {
     expect(get.body.disabled).toBe(false);
   });
 
-  it('delete is honestly unsupported: 403, no state change, no audit', async () => {
+  it('delete is supported since issue #11 but still refuses the calling principal', async () => {
+    // Full delete coverage lives in dwarf-user-delete.test.ts; here we only
+    // assert the placeholder behaviour is gone and the self-delete guard holds.
     const res = await authed(request(h.app).delete(`/api/apps/dwarf/users/${PRINCIPAL}`)).send({
       confirmUsername: 'DwarfOne',
     });
-    expect(res.status).toBe(403);
-    expect(res.body.error.code).toBe('UNSUPPORTED_CAPABILITY');
+    expect(res.status).toBe(400);
+    expect(res.body.error.message).toMatch(/calling admin principal/i);
     const get = await request(h.app).get(`/api/apps/dwarf/users/${PRINCIPAL}`).set('Cookie', cookie);
     expect(get.status).toBe(200);
     expect((await auditRows(h, 'users.delete')).length).toBe(0);

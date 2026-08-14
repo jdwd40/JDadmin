@@ -30,7 +30,7 @@ import type {
  *   coins(coin_id, name, symbol, current_price, supply, market_cap, date_added, description)
  *   portfolios(portfolio_id, user_id, coin_id, quantity, average_purchase_price)
  *   transactions(transaction_id, user_id, coin_id, type, quantity, price, total_amount, transaction_date)
- *   price_history(history_id, coin_id, price, recorded_at)
+ *   price_history(history_id, coin_id, price, created_at)
  * Identifiers are static; all values are parameterized.
  */
 
@@ -63,7 +63,7 @@ const TX_SORTS: Record<string, string> = {
 
 const PH_SORTS: Record<string, string> = {
   id: 'ph.history_id',
-  recordedAt: 'ph.recorded_at',
+  recordedAt: 'ph.created_at',
   price: 'ph.price',
 };
 
@@ -178,7 +178,7 @@ export class CoinsAdapter implements AppAdapter {
     const assetsSparkline = [] as OverviewData['assetsSparkline'];
     for (const coin of spark.rows) {
       const pts = await this.db.query<{ price: string }>(
-        `SELECT price::text FROM ${this.T.priceHistory} WHERE coin_id = $1 ORDER BY recorded_at DESC LIMIT 30`,
+        `SELECT price::text FROM ${this.T.priceHistory} WHERE coin_id = $1 ORDER BY created_at DESC LIMIT 30`,
         [coin.coin_id],
       );
       assetsSparkline.push({
@@ -589,11 +589,11 @@ export class CoinsAdapter implements AppAdapter {
     }
     if (query.from) {
       params.push(query.from);
-      where.push(`ph.recorded_at >= $${params.length}`);
+      where.push(`ph.created_at >= $${params.length}`);
     }
     if (query.to) {
       params.push(query.to);
-      where.push(`ph.recorded_at <= $${params.length}`);
+      where.push(`ph.created_at <= $${params.length}`);
     }
     const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
     const total = await this.db.query<{ count: string }>(
@@ -613,9 +613,9 @@ export class CoinsAdapter implements AppAdapter {
       history_id: number;
       coin_id: number;
       price: string;
-      recorded_at: Date;
+      created_at: Date;
     }>(
-      `SELECT ph.history_id, ph.coin_id, ph.price::text, ph.recorded_at
+      `SELECT ph.history_id, ph.coin_id, ph.price::text, ph.created_at
          FROM ${this.T.priceHistory} ph ${whereSql} ${orderBy} ${page}`,
       params,
     );
@@ -624,7 +624,7 @@ export class CoinsAdapter implements AppAdapter {
         id: String(r.history_id),
         assetId: String(r.coin_id),
         price: Number(r.price),
-        recordedAt: new Date(r.recorded_at).toISOString(),
+        recordedAt: new Date(r.created_at).toISOString(),
       })),
       total: Number(total.rows[0]?.count ?? 0),
       page: query.page,
@@ -640,11 +640,11 @@ export class CoinsAdapter implements AppAdapter {
     }
     if (filter.from) {
       params.push(filter.from);
-      where.push(`recorded_at >= $${params.length}`);
+      where.push(`created_at >= $${params.length}`);
     }
     if (filter.to) {
       params.push(filter.to);
-      where.push(`recorded_at <= $${params.length}`);
+      where.push(`created_at <= $${params.length}`);
     }
     return where.length ? `WHERE ${where.join(' AND ')}` : '';
   }
@@ -668,7 +668,7 @@ export class CoinsAdapter implements AppAdapter {
     }>(
       `SELECT ph.coin_id, c.symbol, count(*)::text AS count,
               min(ph.price)::text AS min, max(ph.price)::text AS max, avg(ph.price)::text AS avg,
-              min(ph.recorded_at) AS first_at, max(ph.recorded_at) AS last_at
+              min(ph.created_at) AS first_at, max(ph.created_at) AS last_at
          FROM ${this.T.priceHistory} ph JOIN ${this.T.coins} c ON c.coin_id = ph.coin_id
          ${whereSql()} GROUP BY ph.coin_id, c.symbol ORDER BY c.symbol`,
       params,

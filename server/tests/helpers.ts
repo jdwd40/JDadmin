@@ -85,7 +85,7 @@ CREATE TABLE price_history (
   history_id SERIAL PRIMARY KEY,
   coin_id INT REFERENCES coins(coin_id) ON DELETE CASCADE,
   price DECIMAL(18, 2) NOT NULL,
-  recorded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+  created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );
 INSERT INTO users (username, email, password_hash, funds) VALUES
   ('alice', 'alice@example.test', '$2a$12$placeholderplaceholderplaceholderplaceholderplaceholde', 500),
@@ -99,7 +99,7 @@ INSERT INTO portfolios (user_id, coin_id, quantity, average_purchase_price) VALU
 INSERT INTO transactions (user_id, coin_id, type, quantity, price, total_amount) VALUES
   (1, 1, 'BUY', 5, 9.5, 47.5),
   (2, 2, 'BUY', 3, 18, 54);
-INSERT INTO price_history (coin_id, price, recorded_at) VALUES
+INSERT INTO price_history (coin_id, price, created_at) VALUES
   (1, 9.0, '2026-01-01T00:00:00Z'),
   (1, 9.5, '2026-01-02T00:00:00Z'),
   (1, 10.0, '2026-01-03T00:00:00Z'),

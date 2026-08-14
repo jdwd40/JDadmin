@@ -91,8 +91,11 @@ const priceResetSchema = z.object({
   expectedCount: z.number().int().min(0),
 });
 
+// Issue #16: individual user delete needs only a simple explicit
+// confirmation — no username typing. Bulk delete-all keeps the much stricter
+// phrase + exact-count confirmation below.
 const userDeleteSchema = z.object({
-  confirmUsername: z.string().min(1),
+  confirm: z.literal(true, { errorMap: () => ({ message: 'Explicit confirmation required' }) }),
 });
 
 /** Bulk delete-all users: exact phrase + exact current user count (issue #10). */
@@ -270,11 +273,8 @@ export function appsRouter(): Router {
       requireDestructiveEnabled(req);
       const adapter = requireAdapter(req);
       if (!adapter.deleteUser || !adapter.userRelatedCounts) throw errors.unsupported('users.delete');
-      const { confirmUsername } = userDeleteSchema.parse(req.body);
+      userDeleteSchema.parse(req.body);
       const before = await adapter.getUser(req.params.userId!);
-      if (confirmUsername !== before.username) {
-        throw errors.badRequest('Confirmation username does not match the user being deleted');
-      }
       const counts = await adapter.userRelatedCounts(req.params.userId!);
       await adapter.deleteUser(req.params.userId!);
       await getCtx(req).audit.record({

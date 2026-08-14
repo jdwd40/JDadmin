@@ -8,11 +8,6 @@ export function resetPhraseOk(input: string): boolean {
   return input.trim() === 'RESET';
 }
 
-/** User delete requires typing the exact username of the user being deleted. */
-export function usernameConfirmOk(input: string, expectedUsername: string): boolean {
-  return input === expectedUsername;
-}
-
 /** Range delete requires an explicit confirmation checkbox. */
 export function confirmChecked(checked: boolean): boolean {
   return checked === true;

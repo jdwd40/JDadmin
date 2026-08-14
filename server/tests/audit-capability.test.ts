@@ -123,7 +123,7 @@ describe('capability isolation and registry behavior', () => {
     });
     const id = created.body.id;
     const ok = await authed(request(h.app).delete(`/api/apps/mock/users/${id}`)).send({
-      confirmUsername: 'deleteme',
+      confirm: true,
     });
     expect(ok.status).toBe(200);
   });

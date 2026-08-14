@@ -101,12 +101,12 @@ describe('capability isolation and registry behavior', () => {
     expect(res.status).toBe(404);
   });
 
-  it('Dwarf user delete is unsupported; mock user delete works (isolation)', async () => {
-    const dwarfDel = await authed(
-      request(h.app).delete('/api/apps/dwarf/users/11111111-1111-1111-1111-111111111111'),
-    ).send({ confirmUsername: 'DwarfOne' });
-    expect(dwarfDel.status).toBe(403);
-    expect(dwarfDel.body.error.code).toBe('UNSUPPORTED_CAPABILITY');
+  it('Dwarf user delete-all is unsupported; mock user delete works (isolation)', async () => {
+    const dwarfDelAll = await authed(
+      request(h.app).post('/api/apps/dwarf/users/delete-all'),
+    ).send({ phrase: 'DELETE ALL', expectedCount: 1 });
+    expect(dwarfDelAll.status).toBe(403);
+    expect(dwarfDelAll.body.error.code).toBe('UNSUPPORTED_CAPABILITY');
 
     const created = await authed(request(h.app).post('/api/apps/mock/users')).send({
       username: 'deleteme',

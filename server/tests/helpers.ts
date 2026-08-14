@@ -38,8 +38,24 @@ export async function createDisposableDb(): Promise<string> {
 export async function dropDisposableDb(name: string): Promise<void> {
   const client = new pg.Client(ADMIN_URL);
   await client.connect();
-  await client.query(`DROP DATABASE IF EXISTS ${name} WITH (FORCE)`);
-  await client.end();
+  try {
+    // DROP ... WITH (FORCE) terminates remaining backends, but jdadmin_test
+    // cannot terminate autovacuum workers (owned by the cluster superuser).
+    // When one happens to be vacuuming the disposable DB the drop fails with
+    // "permission denied to terminate process"; autovacuum moves on in
+    // milliseconds, so retry briefly before giving up.
+    for (let attempt = 1; ; attempt++) {
+      try {
+        await client.query(`DROP DATABASE IF EXISTS ${name} WITH (FORCE)`);
+        return;
+      } catch (err) {
+        if (attempt >= 10 || !/permission denied to terminate process/.test(String(err))) throw err;
+        await new Promise((resolve) => setTimeout(resolve, 250));
+      }
+    }
+  } finally {
+    await client.end();
+  }
 }
 
 /** Minimal legacy Coins schema (mirrors back_coins_x migrations). */
@@ -144,7 +160,15 @@ CREATE TABLE app_auth.auth_events (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id uuid REFERENCES app_auth.users(id) ON DELETE SET NULL,
   event_type text NOT NULL,
+  metadata jsonb,
   occurred_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE TABLE app_auth.password_reset_tokens (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id uuid NOT NULL REFERENCES app_auth.users(id) ON DELETE CASCADE,
+  token_hash text,
+  expires_at timestamptz,
+  created_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE TABLE public.profiles (
   id uuid PRIMARY KEY REFERENCES app_auth.users(id) ON DELETE CASCADE,
@@ -157,7 +181,7 @@ CREATE TABLE public.profiles (
 );
 CREATE TABLE public.wallets (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_id uuid NOT NULL UNIQUE,
+  user_id uuid NOT NULL UNIQUE REFERENCES public.profiles(id) ON DELETE CASCADE,
   dcoin_balance numeric NOT NULL DEFAULT 0,
   loan_debt numeric NOT NULL DEFAULT 0,
   created_at timestamptz NOT NULL DEFAULT now(),
@@ -173,7 +197,7 @@ CREATE TABLE public.gems (
 );
 CREATE TABLE public.portfolio_holdings (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_id uuid NOT NULL,
+  user_id uuid NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
   gem_id uuid NOT NULL,
   amount_grams numeric NOT NULL DEFAULT 0,
   average_buy_price numeric NOT NULL DEFAULT 0,
@@ -183,7 +207,7 @@ CREATE TABLE public.portfolio_holdings (
 );
 CREATE TABLE public.transactions (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_id uuid NOT NULL,
+  user_id uuid NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
   gem_id uuid,
   type text NOT NULL,
   amount_dcoins numeric NOT NULL,
@@ -198,6 +222,42 @@ CREATE TABLE public.price_history (
   gem_id uuid NOT NULL,
   price numeric NOT NULL,
   recorded_at timestamptz NOT NULL DEFAULT now()
+);
+-- Remaining user-anchored tables from the real Dwarf baseline
+-- (database/baseline/006_relational_objects.sql): every FK into profiles is
+-- ON DELETE CASCADE except public_feed, which anonymizes via SET NULL.
+CREATE TABLE public.limit_orders (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id uuid NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
+  gem_id uuid,
+  side text,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE TABLE public.mining_jobs (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id uuid NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
+  gem_id uuid,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE TABLE public.player_action_cooldowns (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id uuid NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
+  gem_id uuid,
+  action text,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE TABLE public.leaderboard_cache (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id uuid NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
+  total_value numeric,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE TABLE public.public_feed (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id uuid REFERENCES public.profiles(id) ON DELETE SET NULL,
+  gem_id uuid,
+  message text,
+  created_at timestamptz NOT NULL DEFAULT now()
 );
 INSERT INTO app_auth.users (id, email, display_name) VALUES
   ('11111111-1111-1111-1111-111111111111', 'dwarf1@example.test', 'DwarfOne');
@@ -218,11 +278,13 @@ INSERT INTO public.price_history (gem_id, price, recorded_at) VALUES
 
 /**
  * Minimal mirrors of the Dwarf engine/auth functions the adapter relies on,
- * plus the JDadmin-provisioned control-plane functions (ops/dwarf/001 + 002).
+ * plus the JDadmin-provisioned control-plane functions (ops/dwarf/001–004).
  * Kept faithful to the real bodies so tests exercise the actual guard logic:
  * transaction-local app.user_id → profiles.role='admin' enforcement,
  * Argon2id-only hash acceptance, starter-package creation via the engine hook,
- * and disabled_at + session-revocation semantics.
+ * disabled_at + session-revocation semantics, and the issue #11 cascading
+ * user delete with truthful counts, self-delete refusal and redacted
+ * app-side audit event.
  */
 export const DWARF_FUNCTIONS_SQL = `
 CREATE FUNCTION public.current_player_id() RETURNS uuid
@@ -484,6 +546,56 @@ BEGIN
    WHERE (p_gem_id IS NULL OR gem_id = p_gem_id);
   GET DIAGNOSTICS v_count = ROW_COUNT;
   RETURN v_count;
+END;
+$fn$;
+
+-- ops/dwarf/004_jdadmin_user_delete.sql (issue #11): hard delete of one user.
+-- Counts dependents first (truthful counts), records a redacted auth event
+-- attributed to the calling admin, then deletes app_auth.users and lets the
+-- verified CASCADE/SET NULL FK graph remove/anonymize every dependent row.
+CREATE FUNCTION public.jdadmin_admin_delete_user(p_user_id uuid)
+RETURNS jsonb
+LANGUAGE plpgsql SECURITY DEFINER SET search_path TO public, app_auth, pg_catalog
+AS $fn$
+DECLARE
+  v_admin uuid := public.current_player_id();
+  v_counts jsonb;
+BEGIN
+  PERFORM public.assert_admin_caller();
+  IF p_user_id IS NULL THEN
+    RAISE EXCEPTION 'user_id required';
+  END IF;
+  IF p_user_id = v_admin THEN
+    RAISE EXCEPTION 'Refusing to delete the calling admin principal';
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM app_auth.users WHERE id = p_user_id) THEN
+    RAISE EXCEPTION 'User not found' USING ERRCODE = 'P0002';
+  END IF;
+
+  SELECT jsonb_build_object(
+    'wallets', (SELECT count(*) FROM public.wallets WHERE user_id = p_user_id),
+    'portfolio_holdings', (SELECT count(*) FROM public.portfolio_holdings WHERE user_id = p_user_id),
+    'transactions', (SELECT count(*) FROM public.transactions WHERE user_id = p_user_id),
+    'limit_orders', (SELECT count(*) FROM public.limit_orders WHERE user_id = p_user_id),
+    'mining_jobs', (SELECT count(*) FROM public.mining_jobs WHERE user_id = p_user_id),
+    'player_action_cooldowns', (SELECT count(*) FROM public.player_action_cooldowns WHERE user_id = p_user_id),
+    'leaderboard_cache', (SELECT count(*) FROM public.leaderboard_cache WHERE user_id = p_user_id),
+    'public_feed_anonymized', (SELECT count(*) FROM public.public_feed WHERE user_id = p_user_id),
+    'identities', (SELECT count(*) FROM app_auth.identities WHERE user_id = p_user_id),
+    'refresh_sessions', (SELECT count(*) FROM app_auth.refresh_sessions WHERE user_id = p_user_id),
+    'password_reset_tokens', (SELECT count(*) FROM app_auth.password_reset_tokens WHERE user_id = p_user_id)
+  ) INTO v_counts;
+
+  INSERT INTO app_auth.auth_events (user_id, event_type, metadata)
+  VALUES (
+    v_admin,
+    'admin_deleted_user',
+    jsonb_build_object('deleted_user_id', p_user_id, 'related_counts', v_counts)
+  );
+
+  DELETE FROM app_auth.users WHERE id = p_user_id;
+
+  RETURN v_counts;
 END;
 $fn$;
 `;

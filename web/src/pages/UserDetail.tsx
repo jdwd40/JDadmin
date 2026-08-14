@@ -63,6 +63,7 @@ export function UserDetail({ app, userId, onBack }: { app: AppInfo; userId: stri
       </div>
       <ErrorBox error={error} />
       {!caps.disable && app.available && <CapabilityNote supported={false} label="Disable/enable" />}
+      {!caps.delete && app.available && <CapabilityNote supported={false} label="User deletion" />}
       {user && (
         <>
           <div className="tabs">

@@ -52,6 +52,7 @@ export function Users({ app, onOpenUser }: { app: AppInfo; onOpenUser: (userId: 
         <h1>{app.label} — Users</h1>
         {caps.create && <button onClick={() => setCreating(true)}>Create user</button>}
       </div>
+      {!caps.create && <CapabilityNote supported={false} label="User creation" />}
       <input
         className="search"
         placeholder="Search username or email…"

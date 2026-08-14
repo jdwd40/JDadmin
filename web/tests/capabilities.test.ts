@@ -3,19 +3,19 @@ import type { AppInfo, CapabilitySet } from '../src/types';
 import { capabilityOf, NAV_ITEMS, resolveNav, selectableApps } from '../src/lib/capabilities';
 
 const full: CapabilitySet = {
-  users: { list: true, get: true, create: true, update: true, disable: true, resetPassword: true, delete: true },
+  users: { list: true, get: true, create: true, update: true, disable: true, resetPassword: true, delete: true, deleteAll: true },
   inventory: { list: true, create: true, update: true, delete: true },
   transactions: { list: true, create: true, update: false, delete: false },
-  priceHistory: { list: true, stats: true, deleteRange: true, reset: true },
+  priceHistory: { list: true, stats: true, delete: true, deleteRange: true, reset: true },
   overview: true,
   health: true,
 };
 
 const none: CapabilitySet = {
-  users: { list: false, get: false, create: false, update: false, disable: false, resetPassword: false, delete: false },
+  users: { list: false, get: false, create: false, update: false, disable: false, resetPassword: false, delete: false, deleteAll: false },
   inventory: { list: false, create: false, update: false, delete: false },
   transactions: { list: false, create: false, update: false, delete: false },
-  priceHistory: { list: false, stats: false, deleteRange: false, reset: false },
+  priceHistory: { list: false, stats: false, delete: false, deleteRange: false, reset: false },
   overview: false,
   health: false,
 };
@@ -62,21 +62,26 @@ describe('resolveNav (capability-aware navigation)', () => {
   });
 });
 
-describe('destructive capability gating (issue #1)', () => {
-  // Mirrors the server-side Coins vs Dwarf capability split.
+describe('destructive capability gating (issues #1 + #10)', () => {
+  // Mirrors the server-side Coins vs Dwarf capability split. Since issue #10
+  // Dwarf supports price-history deletes (provisioned functions) but still
+  // cannot delete users (FK graph cascades into the append-only ledger).
   const dwarfLike: CapabilitySet = {
     ...full,
-    users: { ...full.users, delete: false, disable: false, create: false },
-    priceHistory: { list: true, stats: true, deleteRange: false, reset: false },
+    users: { ...full.users, delete: false, deleteAll: false, disable: true, create: true },
   };
 
   it('delete/reset paths gate on the declared capability', () => {
     expect(capabilityOf(full, 'users.delete')).toBe(true);
+    expect(capabilityOf(full, 'users.deleteAll')).toBe(true);
+    expect(capabilityOf(full, 'priceHistory.delete')).toBe(true);
     expect(capabilityOf(full, 'priceHistory.deleteRange')).toBe(true);
     expect(capabilityOf(full, 'priceHistory.reset')).toBe(true);
     expect(capabilityOf(dwarfLike, 'users.delete')).toBe(false);
-    expect(capabilityOf(dwarfLike, 'priceHistory.deleteRange')).toBe(false);
-    expect(capabilityOf(dwarfLike, 'priceHistory.reset')).toBe(false);
+    expect(capabilityOf(dwarfLike, 'users.deleteAll')).toBe(false);
+    expect(capabilityOf(dwarfLike, 'priceHistory.delete')).toBe(true);
+    expect(capabilityOf(dwarfLike, 'priceHistory.deleteRange')).toBe(true);
+    expect(capabilityOf(dwarfLike, 'priceHistory.reset')).toBe(true);
   });
 });
 

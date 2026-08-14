@@ -17,6 +17,8 @@ export interface CapabilitySet {
     disable: boolean;
     resetPassword: boolean;
     delete: boolean;
+    /** Transactional delete-all of every user + related rows (issue #10). */
+    deleteAll: boolean;
   };
   inventory: {
     list: boolean;
@@ -33,6 +35,8 @@ export interface CapabilitySet {
   priceHistory: {
     list: boolean;
     stats: boolean;
+    /** Individual record delete (issue #10). */
+    delete: boolean;
     deleteRange: boolean;
     reset: boolean;
   };
@@ -217,6 +221,12 @@ export interface RelatedCounts {
   [relation: string]: number;
 }
 
+/** Result of a transactional delete-all-users operation (issue #10). */
+export interface DeleteAllUsersResult {
+  users: number;
+  related: RelatedCounts;
+}
+
 export type CapabilityPath =
   | 'users.list'
   | 'users.get'
@@ -225,6 +235,7 @@ export type CapabilityPath =
   | 'users.disable'
   | 'users.resetPassword'
   | 'users.delete'
+  | 'users.deleteAll'
   | 'inventory.list'
   | 'inventory.create'
   | 'inventory.update'
@@ -235,6 +246,7 @@ export type CapabilityPath =
   | 'transactions.delete'
   | 'priceHistory.list'
   | 'priceHistory.stats'
+  | 'priceHistory.delete'
   | 'priceHistory.deleteRange'
   | 'priceHistory.reset'
   | 'overview'
@@ -276,6 +288,13 @@ export interface AppAdapter {
   /** Counts of related records shown to the operator before deletion. */
   userRelatedCounts?(id: string): Promise<RelatedCounts>;
   deleteUser?(id: string): Promise<void>;
+  /**
+   * Transactional delete of ALL users and their related rows (issue #10).
+   * The route gates this behind capability + destructive guard + exact-count
+   * confirmation; the adapter must run it as one atomic transaction that
+   * rolls back fully on any FK/business error.
+   */
+  deleteAllUsers?(): Promise<DeleteAllUsersResult>;
 
   listInventory(userId: string | undefined, query: ListQuery): Promise<Paged<InventoryItem>>;
   createInventory?(input: InventoryInput): Promise<InventoryItem>;
@@ -289,8 +308,17 @@ export interface AppAdapter {
 
   listPriceHistory(query: PriceHistoryQuery): Promise<Paged<PricePoint>>;
   priceHistoryStats(assetId?: string): Promise<PriceStats[]>;
-  /** Returns number of rows that would be deleted (preview/count step). */
+  /**
+   * Rows matching a filter scope; an empty filter counts the whole table and
+   * is used by the confirmed delete-all flow. Routes enforce the
+   * filter-required rule for delete-range themselves.
+   */
   countPriceHistory(filter: { assetId?: string; from?: string; to?: string }): Promise<number>;
+  /**
+   * Individual price-history record delete (issue #10). Returns the deleted
+   * point for auditing; throws 404 when the id does not exist.
+   */
+  deletePricePoint?(id: string): Promise<PricePoint>;
   deletePriceHistoryRange?(filter: { assetId?: string; from?: string; to?: string }): Promise<number>;
   resetPriceHistory?(assetId?: string): Promise<number>;
 

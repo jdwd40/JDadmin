@@ -12,20 +12,22 @@ export interface CapabilitySet {
     disable: boolean;
     resetPassword: boolean;
     delete: boolean;
+    /** Transactional delete-all of every user + related rows (issue #10). */
+    deleteAll: boolean;
   };
   inventory: { list: boolean; create: boolean; update: boolean; delete: boolean };
   transactions: { list: boolean; create: boolean; update: boolean; delete: boolean };
-  priceHistory: { list: boolean; stats: boolean; deleteRange: boolean; reset: boolean };
+  priceHistory: { list: boolean; stats: boolean; delete: boolean; deleteRange: boolean; reset: boolean };
   overview: boolean;
   health: boolean;
 }
 
 export type CapabilityPath =
   | 'users.list' | 'users.get' | 'users.create' | 'users.update' | 'users.disable'
-  | 'users.resetPassword' | 'users.delete'
+  | 'users.resetPassword' | 'users.delete' | 'users.deleteAll'
   | 'inventory.list' | 'inventory.create' | 'inventory.update' | 'inventory.delete'
   | 'transactions.list' | 'transactions.create' | 'transactions.update' | 'transactions.delete'
-  | 'priceHistory.list' | 'priceHistory.stats' | 'priceHistory.deleteRange' | 'priceHistory.reset'
+  | 'priceHistory.list' | 'priceHistory.stats' | 'priceHistory.delete' | 'priceHistory.deleteRange' | 'priceHistory.reset'
   | 'overview' | 'health';
 
 export interface AppInfo {

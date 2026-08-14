@@ -432,6 +432,60 @@ BEGIN
   RETURN true;
 END;
 $fn$;
+
+-- ops/dwarf/003_jdadmin_price_history_admin.sql
+CREATE FUNCTION public.jdadmin_admin_delete_price_point(p_id uuid)
+RETURNS boolean
+LANGUAGE plpgsql SECURITY DEFINER SET search_path TO public, pg_catalog
+AS $fn$
+BEGIN
+  PERFORM public.assert_admin_caller();
+  IF p_id IS NULL THEN
+    RAISE EXCEPTION 'price history id required';
+  END IF;
+  DELETE FROM public.price_history WHERE id = p_id;
+  RETURN FOUND;
+END;
+$fn$;
+
+CREATE FUNCTION public.jdadmin_admin_delete_price_history_range(
+  p_gem_id uuid,
+  p_from timestamptz,
+  p_to timestamptz
+)
+RETURNS bigint
+LANGUAGE plpgsql SECURITY DEFINER SET search_path TO public, pg_catalog
+AS $fn$
+DECLARE
+  v_count bigint;
+BEGIN
+  PERFORM public.assert_admin_caller();
+  IF p_gem_id IS NULL AND p_from IS NULL AND p_to IS NULL THEN
+    RAISE EXCEPTION 'A filter (gem or date range) is required; use the reset function for delete-all';
+  END IF;
+  DELETE FROM public.price_history
+   WHERE (p_gem_id IS NULL OR gem_id = p_gem_id)
+     AND (p_from IS NULL OR recorded_at >= p_from)
+     AND (p_to IS NULL OR recorded_at <= p_to);
+  GET DIAGNOSTICS v_count = ROW_COUNT;
+  RETURN v_count;
+END;
+$fn$;
+
+CREATE FUNCTION public.jdadmin_admin_reset_price_history(p_gem_id uuid DEFAULT NULL)
+RETURNS bigint
+LANGUAGE plpgsql SECURITY DEFINER SET search_path TO public, pg_catalog
+AS $fn$
+DECLARE
+  v_count bigint;
+BEGIN
+  PERFORM public.assert_admin_caller();
+  DELETE FROM public.price_history
+   WHERE (p_gem_id IS NULL OR gem_id = p_gem_id);
+  GET DIAGNOSTICS v_count = ROW_COUNT;
+  RETURN v_count;
+END;
+$fn$;
 `;
 
 export interface TestHarness {

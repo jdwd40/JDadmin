@@ -38,13 +38,15 @@ be called for something it said it cannot do.
 | users create | ✓ | ✓ (provisioned `jdadmin_admin_create_user` → `app_auth.register_user`, the app's own registration flow) | ✓ |
 | users disable | ✗ (no column; schema must not be migrated) | ✓ (`app_auth.users.disabled_at` + refresh-session revocation) | ✓ |
 | users delete (+ related counts) | ✓ cascade | ✗ (engine/auth FK graph cascades into the append-only ledger; no safe function exists — disable instead) | ✓ |
+| users deleteAll (transactional, phrase + exact-count confirmed) | ✓ one transaction over portfolios → transactions → users, full rollback on FK errors | ✗ (same FK graph as user delete) | ✓ |
 | inventory list | ✓ portfolios | ✓ holdings (read-only) | ✓ |
 | inventory create/update/delete | ✓ | ✗ (engine owns writes) | ✓ |
 | transactions list | ✓ | ✓ (read-only) | ✓ |
 | transactions create | ✓ (funds + holding in one tx) | ✗ | ✓ |
 | transactions update/delete | ✗ (ledger integrity) | ✗ | ✗ |
 | priceHistory list/stats | ✓ | ✓ | ✓ |
-| priceHistory deleteRange/reset | ✓ | ✗ | ✓ |
+| priceHistory delete (individual record) | ✓ | ✓ (provisioned `jdadmin_admin_delete_price_point`) | ✓ |
+| priceHistory deleteRange/reset | ✓ (reset requires exact-count confirmation) | ✓ (provisioned `jdadmin_admin_delete_price_history_range` / `jdadmin_admin_reset_price_history`; range refuses unfiltered calls) | ✓ |
 
 Dwarf's `users.resetPassword` and `users.create` degrade to false at runtime
 if the optional `argon2` dependency cannot be loaded (capability computed at
@@ -52,7 +54,16 @@ boot). `users.create`/`users.disable`/`users.resetPassword` additionally
 require the Dwarf-side provisioning scripts `ops/dwarf/001_jdadmin_principal.sql`
 and `ops/dwarf/002_jdadmin_user_admin.sql` to have been applied by the Dwarf
 owner role; they create the SECURITY DEFINER control-plane functions the
-adapter calls (granted to `dc_api` only).
+adapter calls (granted to `dc_api` only). Dwarf's `priceHistory.delete`/
+`deleteRange`/`reset` additionally require `ops/dwarf/003_jdadmin_price_history_admin.sql`
+(issue #10); those wrappers re-check `public.assert_admin_caller()` and mirror
+the engine's own `prune_old_data` retention deletes — engine-owned OHLC
+aggregates and the transactions ledger are never touched.
+
+Issue #10 delete-all operations (`users.deleteAll`, `priceHistory.reset`) are
+never unfiltered at the HTTP layer: they require the destructive guard, an
+exact confirmation phrase, and the exact current in-scope row count, which the
+server re-validates immediately before executing inside one transaction.
 
 Unavailable apps (missing DB URL or failed registration) appear in
 `GET /api/apps` with `available: false` and an `availabilityError`; their

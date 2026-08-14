@@ -76,16 +76,28 @@ describe('price history (Coins adapter)', () => {
     expect(after.body.total).toBe(1);
   });
 
-  it('reset requires the exact RESET phrase and resets only price history', async () => {
+  it('reset requires the exact RESET phrase and exact row count, and resets only price history', async () => {
     const wrongPhrase = await authed(request(h.app).post('/api/apps/coins/price-history/reset')).send({
       phrase: 'reset',
+      expectedCount: 3,
     });
     expect(wrongPhrase.status).toBe(400);
 
+    // Issue #10: the exact in-scope row count must be confirmed.
+    const wrongCount = await authed(request(h.app).post('/api/apps/coins/price-history/reset')).send({
+      phrase: 'RESET',
+      expectedCount: 99,
+    });
+    expect(wrongCount.status).toBe(400);
+    expect(wrongCount.body.error.message).toContain('3');
+
+    // 3 rows remain after the delete-range test above (asset 1: 1, asset 2: 2).
     const res = await authed(request(h.app).post('/api/apps/coins/price-history/reset')).send({
       phrase: 'RESET',
+      expectedCount: 3,
     });
     expect(res.status).toBe(200);
+    expect(res.body.deleted).toBe(3);
 
     const client = new pg.Client(adminUrlFor(h.dbName));
     await client.connect();
@@ -101,14 +113,12 @@ describe('price history (Coins adapter)', () => {
     expect(Number(coins.rows[0]!.count)).toBe(2);
   });
 
-  it('Dwarf price-history reset/delete are unsupported (honest 403)', async () => {
+  it('Dwarf price-history reset now requires the exact-count confirmation (issue #10)', async () => {
+    // Supported since issue #10 via provisioned functions; without the count
+    // confirmation it fails validation before touching any data.
     const res = await authed(request(h.app).post('/api/apps/dwarf/price-history/reset')).send({ phrase: 'RESET' });
-    expect(res.status).toBe(403);
-    expect(res.body.error.code).toBe('UNSUPPORTED_CAPABILITY');
-    const del = await authed(request(h.app).post('/api/apps/dwarf/price-history/delete-range')).send({
-      assetId: '22222222-2222-2222-2222-222222222222',
-      confirm: true,
-    });
-    expect(del.status).toBe(403);
+    expect(res.status).toBe(400);
+    const ph = await request(h.app).get('/api/apps/dwarf/price-history').set('Cookie', cookie);
+    expect(ph.body.total).toBe(2);
   });
 });

@@ -37,6 +37,11 @@ describe('Dwarf capability flags (unit)', () => {
     expect(caps.users.disable).toBe(true);
     expect(caps.users.resetPassword).toBe(true);
     expect(caps.users.delete).toBe(false);
+    expect(caps.users.deleteAll).toBe(false);
+    // Issue #10: price-history deletes are supported via provisioned wrappers.
+    expect(caps.priceHistory.delete).toBe(true);
+    expect(caps.priceHistory.deleteRange).toBe(true);
+    expect(caps.priceHistory.reset).toBe(true);
   });
 
   it('degrades create/resetPassword when argon2 is unavailable', () => {
@@ -82,6 +87,7 @@ describe('issue #2: Dwarf user administration (disposable DB)', () => {
       disable: true,
       resetPassword: true,
       delete: false,
+      deleteAll: false,
     });
   });
 

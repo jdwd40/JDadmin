@@ -44,7 +44,8 @@ export async function api<T>(path: string, opts: RequestOptions = {}): Promise<T
   if (opts.method && opts.method !== 'GET' && csrfToken) {
     headers['X-CSRF-Token'] = csrfToken;
   }
-  const res = await fetch(`/api${path}${buildQuery(opts.query)}`, {
+  const apiBase = window.location.pathname.startsWith('/admin/') ? '/admin/api' : '/api';
+  const res = await fetch(`${apiBase}${path}${buildQuery(opts.query)}`, {
     method: opts.method ?? 'GET',
     headers,
     body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,

@@ -20,9 +20,12 @@ be called for something it said it cannot do.
    values after a failed refresh), or `unavailable` (all byte fields null +
    sanitized reason). Unavailable is never represented as zero, and raw
    driver/OS error text never reaches the response (fixed reason vocabulary:
-   `permission denied`, `malformed measurement`, `measurement failed`).
-   Probes use static SQL / fixed system paths only, and the health route
-   caches measurements for 30s to bound cost.
+   `permission denied`, `malformed measurement`, `measurement failed`,
+   `process not found`, `ambiguous process match`). Coins/Dwarf process memory
+   is the app server RSS, discovered by fixed-identity exact argv matching
+   under `/proc` (issue #18 — no shell, no request input, hardcoded entry
+   paths). Probes use static SQL / fixed system paths only, and the health
+   route caches measurements for 30s to bound cost.
 5. **Audit is the core's job.** Adapters return data; routes record the audit
    entry with actor, app, action, previous/next (auto-redacted).
 6. **Destructive gates.** Delete/reset methods additionally pass through

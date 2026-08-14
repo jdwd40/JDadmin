@@ -1,5 +1,9 @@
 import { ApiError } from '../core/errors.js';
-import { measureDatabaseStorage, unavailableSample } from '../core/resources.js';
+import {
+  APP_PROCESS_IDENTITIES,
+  measureAppProcessMemory,
+  measureDatabaseStorage,
+} from '../core/resources.js';
 import { AppPool, num, orderByClause, pageClause } from './sql.js';
 import type {
   AppAdapter,
@@ -210,18 +214,17 @@ export class DwarfAdapter implements AppAdapter {
   /**
    * Read-only resource probe. Storage is the on-disk size of the app's
    * PostgreSQL database (app-data scope, one static statement issued directly
-   * on the pool — no RLS principal needed for pg_database_size). The Dwarf
-   * server process runs outside this admin host and cannot be measured over a
-   * SQL connection, so process memory reports 'unavailable' rather than zero.
+   * on the pool — no RLS principal needed for pg_database_size). Memory is the
+   * Dwarf backend process RSS: the systemd service runs on this same host
+   * with a fixed entry path, so it is discovered by exact argv matching under
+   * /proc (issue #18). If the process is absent, ambiguous, or unreadable the
+   * sample reports 'unavailable' with a sanitized reason — never zero.
    */
   async resourceUsage(): Promise<AppResourceUsage> {
     return {
       collectedAt: new Date().toISOString(),
       storage: await measureDatabaseStorage((text) => this.db.query(text)),
-      memory: unavailableSample(
-        'app process',
-        'app process memory is not measurable over a SQL connection',
-      ),
+      memory: await measureAppProcessMemory(APP_PROCESS_IDENTITIES.dwarf),
     };
   }
 

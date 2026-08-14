@@ -1,5 +1,6 @@
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
+import path from 'node:path';
 import type { MetricSample } from '../adapters/types.js';
 
 /**
@@ -140,6 +141,90 @@ export function measureProcessMemory(): MetricSample {
   const scope = 'jdadmin process (RSS)';
   try {
     return okSample(scope, process.memoryUsage().rss, null, null);
+  } catch (err) {
+    return unavailableSample(scope, sanitizeMetricError(err));
+  }
+}
+
+/**
+ * Fixed identity of one app's server process (issue #18). Identities are
+ * hardcoded deployment constants — never derived from request input — and a
+ * process only matches when its argv contains the command path as an exact,
+ * whole token (so `bash -c "… server.js"`, editor/inspection commands, and
+ * lookalike paths never match).
+ */
+export interface AppProcessIdentity {
+  /** Short human label used in the scope text, e.g. 'coins backend'. */
+  label: string;
+  /** Fixed absolute path of the app server entry point (exact argv token). */
+  commandPath: string;
+}
+
+/** Confirmed same-VPS deployment identities (dynamic PIDs, readable /proc). */
+export const APP_PROCESS_IDENTITIES = {
+  coins: {
+    label: 'coins backend',
+    commandPath: '/home/jd/back_coins_x/server.js',
+  },
+  dwarf: {
+    label: 'dwarf backend',
+    commandPath: '/srv/dwarf-gem-exchange/production/current/backend/dist/server.js',
+  },
+} as const satisfies Record<string, AppProcessIdentity>;
+
+/**
+ * List PIDs under `procRoot` whose cmdline contains `commandPath` as an exact
+ * argv token. Entries that vanish or cannot be read mid-scan are skipped
+ * (they are not confirmed matches), matching read-only /proc semantics.
+ */
+async function findPidsByCommandPath(procRoot: string, commandPath: string): Promise<string[]> {
+  const entries = await fs.readdir(procRoot);
+  const matches: string[] = [];
+  for (const name of entries) {
+    if (!/^\d+$/.test(name)) continue;
+    let cmdline: string;
+    try {
+      cmdline = await fs.readFile(path.join(procRoot, name, 'cmdline'), 'utf8');
+    } catch {
+      continue; // process exited or is unreadable: not a confirmed match
+    }
+    if (cmdline.split('\0').some((arg) => arg === commandPath)) matches.push(name);
+  }
+  return matches;
+}
+
+/**
+ * RSS of one app's server process, discovered by fixed-identity exact argv
+ * matching under /proc (no shell, no request-supplied input). usedBytes is
+ * the process VmRSS; total/available/percent are not meaningful for a single
+ * process RSS and stay null.
+ *
+ * Failure honesty: absent, unreadable, ambiguous (more than one exact match),
+ * malformed, or permission-denied measurements report 'unavailable' with a
+ * sanitized fixed reason — never zero and never another process's RSS.
+ */
+export async function measureAppProcessMemory(
+  identity: AppProcessIdentity,
+  procRoot = '/proc',
+): Promise<MetricSample> {
+  const scope = `app process (RSS: ${identity.label})`;
+  let pids: string[];
+  try {
+    pids = await findPidsByCommandPath(procRoot, identity.commandPath);
+  } catch (err) {
+    return unavailableSample(scope, sanitizeMetricError(err));
+  }
+  if (pids.length !== 1) {
+    return unavailableSample(
+      scope,
+      pids.length === 0 ? 'process not found' : 'ambiguous process match',
+    );
+  }
+  try {
+    const status = await fs.readFile(path.join(procRoot, pids[0] as string, 'status'), 'utf8');
+    const rssBytes = parseMeminfoBytes(status, 'VmRSS');
+    if (rssBytes === null) return unavailableSample(scope, 'malformed measurement');
+    return okSample(scope, rssBytes, null, null);
   } catch (err) {
     return unavailableSample(scope, sanitizeMetricError(err));
   }

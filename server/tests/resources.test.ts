@@ -1,7 +1,12 @@
+import { promises as fs } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { MetricSample } from '../src/adapters/types.js';
 import {
+  APP_PROCESS_IDENTITIES,
+  measureAppProcessMemory,
   measureDatabaseStorage,
   measureProcessMemory,
   MetricsCache,
@@ -119,6 +124,171 @@ describe('resource measurement helpers', () => {
     });
   });
 
+  describe('measureAppProcessMemory (issue #18)', () => {
+    const coins = APP_PROCESS_IDENTITIES.coins;
+
+    it('pins the confirmed fixed deployment identities', () => {
+      expect(APP_PROCESS_IDENTITIES.coins.commandPath).toBe('/home/jd/back_coins_x/server.js');
+      expect(APP_PROCESS_IDENTITIES.dwarf.commandPath).toBe(
+        '/srv/dwarf-gem-exchange/production/current/backend/dist/server.js',
+      );
+    });
+
+    interface FakeProcEntry {
+      cmdline?: string;
+      status?: string;
+      /** chmod applied to the status file (e.g. to simulate EACCES). */
+      statusMode?: number;
+    }
+
+    async function makeProcRoot(entries: Record<string, FakeProcEntry>): Promise<string> {
+      const root = await fs.mkdtemp(path.join(os.tmpdir(), 'jdadmin-proc-'));
+      for (const [name, entry] of Object.entries(entries)) {
+        const dir = path.join(root, name);
+        await fs.mkdir(dir);
+        if (entry.cmdline !== undefined) await fs.writeFile(path.join(dir, 'cmdline'), entry.cmdline);
+        if (entry.status !== undefined) {
+          const p = path.join(dir, 'status');
+          await fs.writeFile(p, entry.status);
+          if (entry.statusMode !== undefined) await fs.chmod(p, entry.statusMode);
+        }
+      }
+      return root;
+    }
+
+    const statusWithRss = (kb: number) => `Name:\tnode\nVmRSS:\t   ${kb} kB\nVmSize:\t  999999 kB\n`;
+
+    it('reports RSS for an exact argv-token match, with null total/percent', async () => {
+      const root = await makeProcRoot({
+        '4321': {
+          cmdline: `node\0${coins.commandPath}\0`,
+          status: statusWithRss(51200),
+        },
+        '999': { cmdline: 'postgres\0-D\0/var/lib/pg\0', status: statusWithRss(1) },
+        cpuinfo: {},
+      });
+      try {
+        const s = await measureAppProcessMemory(coins, root);
+        expect(s).toMatchObject({
+          status: 'ok',
+          usedBytes: 51200 * 1024,
+          availableBytes: null,
+          totalBytes: null,
+          percentUsed: null,
+          reason: null,
+        });
+        expect(s.scope).toContain('app process');
+        expect(s.scope).toContain('coins backend');
+      } finally {
+        await fs.rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it('requires an exact token: substring/lookalike/embedded paths do not match', async () => {
+      const root = await makeProcRoot({
+        '100': { cmdline: `node\0${coins.commandPath}.bak\0`, status: statusWithRss(100) },
+        '101': { cmdline: `node\0/home/jd/back_coins_x\0`, status: statusWithRss(100) },
+        // bash -c keeps the whole script as one token: the path is embedded, not exact.
+        '102': { cmdline: `/usr/bin/bash\0-c\0node ${coins.commandPath}\0`, status: statusWithRss(100) },
+      });
+      try {
+        const s = await measureAppProcessMemory(coins, root);
+        expect(s.status).toBe('unavailable');
+        expect(s.reason).toBe('process not found');
+        expect(s.usedBytes).toBeNull();
+      } finally {
+        await fs.rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it('reports process not found when no process matches', async () => {
+      const root = await makeProcRoot({ '1': { cmdline: 'sbin/init\0', status: statusWithRss(10) } });
+      try {
+        const s = await measureAppProcessMemory(coins, root);
+        expect(s).toMatchObject({ status: 'unavailable', usedBytes: null, percentUsed: null });
+        expect(s.reason).toBe('process not found');
+      } finally {
+        await fs.rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it('reports ambiguous rather than picking one of several matches', async () => {
+      const root = await makeProcRoot({
+        '200': { cmdline: `node\0${coins.commandPath}\0`, status: statusWithRss(1000) },
+        '201': { cmdline: `node\0${coins.commandPath}\0`, status: statusWithRss(2000) },
+      });
+      try {
+        const s = await measureAppProcessMemory(coins, root);
+        expect(s.status).toBe('unavailable');
+        expect(s.reason).toBe('ambiguous process match');
+        expect(s.usedBytes).toBeNull(); // never one of the candidates' RSS
+      } finally {
+        await fs.rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it('reports malformed measurement when VmRSS is missing or unparsable', async () => {
+      const root = await makeProcRoot({
+        '300': { cmdline: `node\0${coins.commandPath}\0`, status: 'Name:\tnode\nVmRSS:\thuge\n' },
+      });
+      try {
+        const s = await measureAppProcessMemory(coins, root);
+        expect(s.status).toBe('unavailable');
+        expect(s.reason).toBe('malformed measurement');
+        expect(s.usedBytes).toBeNull();
+      } finally {
+        await fs.rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it('reports permission denied when the status file is unreadable', async () => {
+      const root = await makeProcRoot({
+        '400': {
+          cmdline: `node\0${coins.commandPath}\0`,
+          status: statusWithRss(1234),
+          statusMode: 0o000,
+        },
+      });
+      try {
+        const s = await measureAppProcessMemory(coins, root);
+        expect(s.status).toBe('unavailable');
+        expect(s.reason).toBe('permission denied');
+        expect(s.usedBytes).toBeNull();
+      } finally {
+        await fs.chmod(path.join(root, '400', 'status'), 0o644).catch(() => {});
+        await fs.rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it('sanitizes proc enumeration failures without leaking OS error text', async () => {
+      const s = await measureAppProcessMemory(coins, path.join(os.tmpdir(), 'jdadmin-no-such-dir'));
+      expect(s.status).toBe('unavailable');
+      expect(s.reason).toBe('measurement failed');
+      expect(JSON.stringify(s)).not.toContain('jdadmin-no-such-dir');
+    });
+
+    it('degrades to stale (values preserved) when a refresh stops finding the process', async () => {
+      const root = await makeProcRoot({
+        '500': { cmdline: `node\0${coins.commandPath}\0`, status: statusWithRss(2048) },
+      });
+      let now = 1_000;
+      const cache = new MetricsCache(30_000, () => now);
+      try {
+        const first = await cache.sample('k', () => measureAppProcessMemory(coins, root));
+        expect(first.sample.status).toBe('ok');
+        now += 31_000;
+        await fs.rm(path.join(root, '500'), { recursive: true, force: true });
+        const second = await cache.sample('k', () => measureAppProcessMemory(coins, root));
+        expect(second.sample.status).toBe('stale');
+        expect(second.sample.usedBytes).toBe(2048 * 1024); // last good value, not zero
+        expect(second.sample.reason).toBe('process not found');
+        expect(second.at).toBe(1_000);
+      } finally {
+        await fs.rm(root, { recursive: true, force: true });
+      }
+    });
+  });
+
   describe('MetricsCache', () => {
     const good = (): MetricSample => okSample('test', 10, 90, 100);
 
@@ -199,12 +369,14 @@ describe('GET /api/health/detail resource usage (issue #4)', () => {
       expect(storage.scope).toContain('database');
       expect(storage.usedBytes).toBeGreaterThan(0);
 
-      // App process memory is not measurable over SQL: unavailable, never zero.
+      // App process RSS is probed via fixed-identity /proc matching (issue
+      // #18); the Coins/Dwarf server processes do not run on the test host, so
+      // the sample is unavailable — never zero.
       expect(memory.status).toBe('unavailable');
       expect(memory.scope).toContain('app process');
       expect(memory.usedBytes).toBeNull();
       expect(memory.percentUsed).toBeNull();
-      expect(memory.reason).toBeTruthy();
+      expect(memory.reason).toBe('process not found');
     }
   });
 

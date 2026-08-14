@@ -14,9 +14,18 @@ be called for something it said it cannot do.
 2. **Capabilities are honest.** Set a flag `false` and omit (or throw from)
    the matching method. The UI renders exactly what the flags declare.
 3. **Capability probes.** `ping()` must be cheap and must not mutate.
-4. **Audit is the core's job.** Adapters return data; routes record the audit
+4. **Resource probes (issue #4).** Optional `resourceUsage()` returns read-only
+   storage/memory samples with an explicit scope label (app database, app
+   process, host-wide, …). Every sample has a status: `ok`, `stale` (last good
+   values after a failed refresh), or `unavailable` (all byte fields null +
+   sanitized reason). Unavailable is never represented as zero, and raw
+   driver/OS error text never reaches the response (fixed reason vocabulary:
+   `permission denied`, `malformed measurement`, `measurement failed`).
+   Probes use static SQL / fixed system paths only, and the health route
+   caches measurements for 30s to bound cost.
+5. **Audit is the core's job.** Adapters return data; routes record the audit
    entry with actor, app, action, previous/next (auto-redacted).
-5. **Destructive gates.** Delete/reset methods additionally pass through
+6. **Destructive gates.** Delete/reset methods additionally pass through
    `requireDestructiveEnabled` (ALLOW_DESTRUCTIVE) and per-route confirmation
    schemas in the HTTP layer.
 

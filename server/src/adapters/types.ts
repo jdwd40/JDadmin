@@ -178,6 +178,41 @@ export interface AppHealth {
   error?: string;
 }
 
+/**
+ * Resource-usage contract (issue #4). A sample is either 'ok' with real byte
+ * values, 'stale' (last good values after a failed refresh), or 'unavailable'
+ * with every byte field null and a sanitized reason. Unavailable is never
+ * represented as zero. `scope` is a human-readable label stating whether the
+ * value is app-specific, database-scoped, process-scoped, or host-wide.
+ */
+export type MetricStatus = 'ok' | 'unavailable' | 'stale';
+
+export interface MetricSample {
+  status: MetricStatus;
+  scope: string;
+  usedBytes: number | null;
+  availableBytes: number | null;
+  totalBytes: number | null;
+  /** 0–100 (one decimal) when a meaningful total exists, else null. */
+  percentUsed: number | null;
+  /** Fixed-vocabulary reason when status is not 'ok'; never raw driver errors. */
+  reason: string | null;
+}
+
+export interface AppResourceUsage {
+  /** ISO timestamp of when the underlying values were collected. */
+  collectedAt: string;
+  storage: MetricSample;
+  memory: MetricSample;
+}
+
+export interface HostResourceUsage {
+  collectedAt: string;
+  memory: MetricSample;
+  storage: MetricSample;
+  processMemory: MetricSample;
+}
+
 export interface RelatedCounts {
   [relation: string]: number;
 }
@@ -223,6 +258,12 @@ export interface AppAdapter {
 
   /** Lightweight connectivity probe used for availability + health. */
   ping(): Promise<AppHealth>;
+  /**
+   * Read-only resource usage probe (issue #4). Optional; adapters that cannot
+   * measure safely must omit it (the core then reports 'unavailable').
+   * Unavailable metrics report status + reason, never zero.
+   */
+  resourceUsage?(): Promise<AppResourceUsage>;
   overview(): Promise<OverviewData>;
   listAssets(): Promise<AssetInfo[]>;
 

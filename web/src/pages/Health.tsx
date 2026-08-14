@@ -1,13 +1,27 @@
 import { useEffect, useState } from 'react';
 import { api } from '../api';
-import { ErrorBox } from '../components/common';
-import type { AppHealth } from '../types';
+import { ErrorBox, fmtDate } from '../components/common';
+import { describeMetric } from '../lib/format';
+import type { AppHealth, AppResourceUsage, HostResourceUsage, MetricSample } from '../types';
 
 interface HealthDetail {
   ok: boolean;
   adminDb: { ok: boolean; error?: string };
   /** Per-app ping result keyed by app id (unavailable apps report ok:false + error). */
-  apps: Record<string, AppHealth>;
+  apps: Record<string, AppHealth & { resources?: AppResourceUsage }>;
+  /** Admin-host resource usage (host-wide scope, not app-specific). */
+  host?: HostResourceUsage;
+}
+
+function MetricRow({ label, metric }: { label: string; metric: MetricSample }) {
+  const d = describeMetric(metric);
+  return (
+    <div className="small">
+      <span className="muted">{label}: </span>
+      <span className={d.tone}>{d.text}</span>
+      <div className="muted">{d.detail}</div>
+    </div>
+  );
 }
 
 export function Health() {
@@ -45,8 +59,24 @@ export function Health() {
                 {Object.entries(h.tables).map(([t, n]) => `${t}: ${n}`).join(' · ')}
               </div>
             )}
+            {h.resources && (
+              <div>
+                <MetricRow label="Storage" metric={h.resources.storage} />
+                <MetricRow label="Memory" metric={h.resources.memory} />
+                <div className="muted small">collected {fmtDate(h.resources.collectedAt)}</div>
+              </div>
+            )}
           </div>
         ))}
+        {data.host && (
+          <div className="card stat">
+            <span className="muted">Admin host</span>
+            <MetricRow label="Memory" metric={data.host.memory} />
+            <MetricRow label="Storage" metric={data.host.storage} />
+            <MetricRow label="Process" metric={data.host.processMemory} />
+            <div className="muted small">collected {fmtDate(data.host.collectedAt)}</div>
+          </div>
+        )}
       </div>
     </div>
   );

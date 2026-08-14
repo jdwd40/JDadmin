@@ -2,6 +2,7 @@ import { ApiError } from '../core/errors.js';
 import type {
   AppAdapter,
   AppHealth,
+  AppResourceUsage,
   AssetInfo,
   CapabilitySet,
   InventoryInput,
@@ -135,6 +136,31 @@ export class MockAdapter implements AppAdapter {
         inventory: this.inventory.length,
         transactions: this.transactions.length,
         priceHistory: this.prices.length,
+      },
+    };
+  }
+
+  /** Deterministic simulated resource usage so the UI can exercise every state. */
+  async resourceUsage(): Promise<AppResourceUsage> {
+    return {
+      collectedAt: new Date().toISOString(),
+      storage: {
+        status: 'ok',
+        scope: 'mock app data (simulated)',
+        usedBytes: 128 * 1024 * 1024,
+        availableBytes: null,
+        totalBytes: null,
+        percentUsed: null,
+        reason: null,
+      },
+      memory: {
+        status: 'ok',
+        scope: 'mock app process (simulated)',
+        usedBytes: 64 * 1024 * 1024,
+        availableBytes: 448 * 1024 * 1024,
+        totalBytes: 512 * 1024 * 1024,
+        percentUsed: 12.5,
+        reason: null,
       },
     };
   }

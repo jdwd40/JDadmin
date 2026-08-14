@@ -1,9 +1,11 @@
 import bcrypt from 'bcryptjs';
 import { ApiError } from '../core/errors.js';
+import { measureDatabaseStorage, unavailableSample } from '../core/resources.js';
 import { AppPool, num, orderByClause, pageClause } from './sql.js';
 import type {
   AppAdapter,
   AppHealth,
+  AppResourceUsage,
   AssetInfo,
   CapabilitySet,
   InventoryInput,
@@ -158,6 +160,23 @@ export class CoinsAdapter implements AppAdapter {
     } catch (err) {
       return { ok: false, latencyMs: Date.now() - start, error: (err as Error).message };
     }
+  }
+
+  /**
+   * Read-only resource probe. Storage is the on-disk size of the app's
+   * PostgreSQL database (app-data scope, one static statement). The Coins
+   * server process runs outside this admin host and cannot be measured over a
+   * SQL connection, so process memory reports 'unavailable' rather than zero.
+   */
+  async resourceUsage(): Promise<AppResourceUsage> {
+    return {
+      collectedAt: new Date().toISOString(),
+      storage: await measureDatabaseStorage((text) => this.db.query(text)),
+      memory: unavailableSample(
+        'app process',
+        'app process memory is not measurable over a SQL connection',
+      ),
+    };
   }
 
   async overview(): Promise<OverviewData> {

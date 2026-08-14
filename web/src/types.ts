@@ -128,6 +128,32 @@ export interface AppHealth {
   error?: string;
 }
 
+/** Mirrors the server resource-usage contract (issue #4). */
+export type MetricStatus = 'ok' | 'unavailable' | 'stale';
+
+export interface MetricSample {
+  status: MetricStatus;
+  scope: string;
+  usedBytes: number | null;
+  availableBytes: number | null;
+  totalBytes: number | null;
+  percentUsed: number | null;
+  reason: string | null;
+}
+
+export interface AppResourceUsage {
+  collectedAt: string;
+  storage: MetricSample;
+  memory: MetricSample;
+}
+
+export interface HostResourceUsage {
+  collectedAt: string;
+  memory: MetricSample;
+  storage: MetricSample;
+  processMemory: MetricSample;
+}
+
 export interface AuditEntry {
   id: number;
   actorId: string | null;

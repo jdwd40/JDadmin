@@ -27,14 +27,17 @@ import type {
 } from './types.js';
 
 /**
- * Coins adapter — targets the legacy Coins schema (read-only inspection of
- * /home/jd/work/back_coins_x/db/migrations):
+ * Coins adapter — targets the legacy Coins schema (production-shaped, verified
+ * against /home/jd/work/back_coins_x seed.js + migrations 002–006):
  *   users(user_id, username, email, password_hash, funds, created_at, updated_at)
  *   coins(coin_id, name, symbol, current_price, supply, market_cap, date_added, description)
  *   portfolios(portfolio_id, user_id, coin_id, quantity, average_purchase_price)
- *   transactions(transaction_id, user_id, coin_id, type, quantity, price, total_amount, transaction_date)
+ *   transactions(transaction_id, user_id, coin_id, type, quantity, price, total_amount, created_at)
  *   price_history(history_id, coin_id, price, created_at)
  * Identifiers are static; all values are parameterized.
+ *
+ * Issue #17: production coins_x.transactions has created_at, NOT the obsolete
+ * transaction_date — every transaction timestamp reference below uses created_at.
  */
 
 const BASE_TABLES = {
@@ -58,7 +61,7 @@ const USER_SORTS: Record<string, string> = {
 
 const TX_SORTS: Record<string, string> = {
   id: 't.transaction_id',
-  createdAt: 't.transaction_date',
+  createdAt: 't.created_at',
   quantity: 't.quantity',
   price: 't.price',
   totalAmount: 't.total_amount',
@@ -194,7 +197,7 @@ export class CoinsAdapter implements AppAdapter {
       this.db.query(
         `SELECT t.*, c.symbol AS coin_symbol FROM ${this.T.transactions} t
          LEFT JOIN ${this.T.coins} c ON c.coin_id = t.coin_id
-         ORDER BY t.transaction_date DESC LIMIT 10`,
+         ORDER BY t.created_at DESC LIMIT 10`,
       ),
     ]);
     const assetsSparkline = [] as OverviewData['assetsSparkline'];
@@ -491,7 +494,7 @@ export class CoinsAdapter implements AppAdapter {
       quantity: num(r.quantity),
       price: num(r.price),
       totalAmount: num(r.total_amount),
-      createdAt: new Date(r.transaction_date as string).toISOString(),
+      createdAt: new Date(r.created_at as string).toISOString(),
     };
   }
 

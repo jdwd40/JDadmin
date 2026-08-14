@@ -16,7 +16,13 @@ describe('overview endpoints', () => {
     await h.cleanup();
   });
 
-  it('returns the complete Coins overview for the deployed price-history schema', async () => {
+  /**
+   * Issue #17 regression: COINS_SCHEMA_SQL is production-shaped — transactions
+   * has created_at and NO transaction_date. Any adapter reference to the
+   * obsolete transaction_date column (overview ORDER BY, list sort, row
+   * mapping) fails this suite with a PostgreSQL undefined-column error.
+   */
+  it('returns the complete Coins overview for the production-shaped schema', async () => {
     const res = await request(h.app).get('/api/apps/coins/overview').set('Cookie', cookie);
 
     expect(res.status).toBe(200);
@@ -30,11 +36,19 @@ describe('overview endpoints', () => {
       { assetId: '1', symbol: 'ALPHA', latestPrice: 10, points: [9, 9.5, 10] },
       { assetId: '2', symbol: 'BETA', latestPrice: 20, points: [19, 20] },
     ]);
+    expect(res.body.recentTransactions).toHaveLength(2);
     expect(res.body.recentTransactions).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ userId: '1', assetId: '1', assetSymbol: 'ALPHA', type: 'buy' }),
+        expect.objectContaining({ userId: '2', assetId: '2', assetSymbol: 'BETA', type: 'buy' }),
       ]),
     );
+    // Every recent transaction must carry a real ISO timestamp from created_at
+    // (reading the obsolete transaction_date yields an invalid date / 500).
+    for (const tx of res.body.recentTransactions as Array<{ createdAt: unknown }>) {
+      expect(typeof tx.createdAt).toBe('string');
+      expect(new Date(tx.createdAt as string).toISOString()).toBe(tx.createdAt);
+    }
   });
 
   it('returns a useful zero-data Coins overview', async () => {

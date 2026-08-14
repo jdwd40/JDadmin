@@ -58,7 +58,7 @@ export async function dropDisposableDb(name: string): Promise<void> {
   }
 }
 
-/** Minimal legacy Coins schema (mirrors back_coins_x migrations). */
+/** Production-shaped Coins schema (mirrors back_coins_x seed.js + migrations). */
 export const COINS_SCHEMA_SQL = `
 CREATE TABLE users (
   user_id SERIAL PRIMARY KEY,
@@ -95,7 +95,8 @@ CREATE TABLE transactions (
   quantity DECIMAL(18, 2) NOT NULL,
   price DECIMAL(18, 2) NOT NULL,
   total_amount DECIMAL(18, 2) NOT NULL,
-  transaction_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+  -- Issue #17: production coins_x.transactions uses created_at (no transaction_date).
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 CREATE TABLE price_history (
   history_id SERIAL PRIMARY KEY,

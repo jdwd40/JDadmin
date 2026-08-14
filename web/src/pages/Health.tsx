@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
 import { api } from '../api';
 import { ErrorBox, fmtDate } from '../components/common';
-import { describeMetric } from '../lib/format';
-import type { AppHealth, AppResourceUsage, HostResourceUsage, MetricSample } from '../types';
+import { MetricCard } from '../components/MetricCard';
+import type { AppHealth, AppResourceUsage, HostResourceUsage } from '../types';
 
 interface HealthDetail {
   ok: boolean;
@@ -13,15 +13,8 @@ interface HealthDetail {
   host?: HostResourceUsage;
 }
 
-function MetricRow({ label, metric }: { label: string; metric: MetricSample }) {
-  const d = describeMetric(metric);
-  return (
-    <div className="small">
-      <span className="muted">{label}: </span>
-      <span className={d.tone}>{d.text}</span>
-      <div className="muted">{d.detail}</div>
-    </div>
-  );
+function titleCase(id: string): string {
+  return id.charAt(0).toUpperCase() + id.slice(1);
 }
 
 export function Health() {
@@ -34,6 +27,11 @@ export function Health() {
 
   if (error) return <ErrorBox error={error} />;
   if (!data) return <p className="muted">Checking health…</p>;
+
+  const appsWithResources = Object.entries(data.apps).filter(
+    (entry): entry is [string, AppHealth & { resources: AppResourceUsage }] =>
+      entry[1].resources !== undefined,
+  );
 
   return (
     <div>
@@ -59,25 +57,52 @@ export function Health() {
                 {Object.entries(h.tables).map(([t, n]) => `${t}: ${n}`).join(' · ')}
               </div>
             )}
-            {h.resources && (
-              <div>
-                <MetricRow label="Storage" metric={h.resources.storage} />
-                <MetricRow label="Memory" metric={h.resources.memory} />
-                <div className="muted small">collected {fmtDate(h.resources.collectedAt)}</div>
-              </div>
-            )}
           </div>
         ))}
-        {data.host && (
-          <div className="card stat">
-            <span className="muted">Admin host</span>
-            <MetricRow label="Memory" metric={data.host.memory} />
-            <MetricRow label="Storage" metric={data.host.storage} />
-            <MetricRow label="Process" metric={data.host.processMemory} />
-            <div className="muted small">collected {fmtDate(data.host.collectedAt)}</div>
-          </div>
-        )}
       </div>
+
+      {appsWithResources.length > 0 && (
+        <section aria-labelledby="app-resources-heading">
+          <h2 id="app-resources-heading">Application resources</h2>
+          {appsWithResources.map(([id, h]) => (
+            <div className="card metric-group" key={id}>
+              <div className="metric-group-head">
+                <strong>{titleCase(id)}</strong>
+                <span className={`status-pill ${h.ok ? 'status-normal' : 'status-unavailable'}`}>
+                  {h.ok ? 'Reachable' : 'Unreachable'}
+                </span>
+                <span className="muted small">collected {fmtDate(h.resources.collectedAt)}</span>
+              </div>
+              <div className="metric-grid">
+                <MetricCard label="Storage" metric={h.resources.storage} />
+                <MetricCard label="Memory" metric={h.resources.memory} />
+              </div>
+            </div>
+          ))}
+        </section>
+      )}
+
+      {data.host && (
+        <section aria-labelledby="host-resources-heading">
+          <h2 id="host-resources-heading">Admin host resources</h2>
+          <p className="muted small">
+            Host-wide measurements for the machine running JDadmin — distinct from the per-app
+            database metrics above.
+          </p>
+          <div className="card metric-group metric-group-host">
+            <div className="metric-group-head">
+              <strong>Admin host</strong>
+              <span className="status-pill status-host">Host-wide</span>
+              <span className="muted small">collected {fmtDate(data.host.collectedAt)}</span>
+            </div>
+            <div className="metric-grid">
+              <MetricCard label="Host memory" metric={data.host.memory} />
+              <MetricCard label="Host storage" metric={data.host.storage} />
+              <MetricCard label="Process memory (RSS)" metric={data.host.processMemory} />
+            </div>
+          </div>
+        </section>
+      )}
     </div>
   );
 }

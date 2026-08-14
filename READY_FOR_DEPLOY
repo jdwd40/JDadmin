@@ -1,0 +1,16 @@
+READY_FOR_DEPLOY
+================
+
+Universal Admin (JDadmin) — verified 2026-08-14.
+
+Gate results from a single full run in /home/jd/work/JDadmin:
+  npm test           server 48/48 passed (5 files) + web 15/15 passed (3 files)
+  npm run typecheck  clean (server + web)
+  npm run lint       clean (ESLint 9 + typescript-eslint, no errors/warnings)
+  npm run build      server dist/ + web dist/ (182.9 kB JS, 55 kB gzip)
+  npm run smoke      16/16 checks passed (disposable DB + mock adapter)
+
+See KIMI_REPORT.md for details, README.md for the deployment plan and runbook.
+
+Not performed (per task constraints): no push, no deploy, no live-system
+changes. Deployment requires explicit approval.
